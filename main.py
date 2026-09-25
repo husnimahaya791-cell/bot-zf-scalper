@@ -25,6 +25,7 @@ GLOBAL_PARAMS = {
     "use_trailing": True
 }
 
+# Simbol resmi Twelve Data
 ASSET_CONFIG = {
     "Forex Majors": {
         "api_key": os.environ.get("TWELVEDATA_API_KEY_1", "YOUR_API_KEY_1"),
@@ -40,7 +41,7 @@ ASSET_CONFIG = {
     },
     "Energies": {
         "api_key": os.environ.get("TWELVEDATA_API_KEY_3", "YOUR_API_KEY_3"),
-        "symbols": ["USOIL", "UKOIL"],
+        "symbols": ["WTI/USD", "XBR/USD"],
         "interval": "5min",
         "params": GLOBAL_PARAMS
     },
@@ -75,6 +76,7 @@ for sym in SYMBOLS:
         "candle_history": pd.DataFrame()
     }
 
+
 def save_bot_state():
     try:
         data_to_save = {}
@@ -93,6 +95,7 @@ def save_bot_state():
     except Exception as e:
         print(f"[-] Gagal menyimpan state: {e}")
 
+
 def load_bot_state():
     if os.path.exists(STATE_FILE):
         try:
@@ -106,6 +109,7 @@ def load_bot_state():
         except Exception as e:
             print(f"[-] Gagal memuat state: {e}")
 
+
 def fmt_p(symbol, val):
     if val is None or np.isnan(val):
         return "-"
@@ -117,11 +121,14 @@ def fmt_p(symbol, val):
     else:
         return f"{val:,.2f}"
 
+
 app = Flask(__name__)
+
 
 @app.route('/')
 def home():
     return "ZF-Core Scalper M91 Pro: Active", 200
+
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -133,6 +140,7 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"[-] Exception Telegram: {e}")
 
+
 def calculate_zf_core(df, params):
     if df.empty or len(df) < 200:
         return df
@@ -140,7 +148,12 @@ def calculate_zf_core(df, params):
     p = params
     df = df.copy()
 
-    df['vol_eff'] = np.where(df['volume'] > 0, df['volume'], 1.0)
+    # Fallback Proxy Volume
+    vol_raw = df['volume'] if 'volume' in df.columns else pd.Series(0, index=df.index)
+    if (vol_raw == 0).all() or (vol_raw.std() == 0):
+        df['vol_eff'] = (df['high'] - df['low']).replace(0, 1e-6)
+    else:
+        df['vol_eff'] = np.where(vol_raw > 0, vol_raw, (df['high'] - df['low']).replace(0, 1e-6))
 
     pv = df['close'] * df['vol_eff']
     pv_sum = pv.rolling(window=p['length_period']).sum()
@@ -153,12 +166,10 @@ def calculate_zf_core(df, params):
 
     v_avg = df['vol_eff'].rolling(window=p['length_period']).mean()
     v_abs = (df['vol_eff'] - v_avg).abs()
-    df['zf_ratio'] = v_abs / df['vol_eff']
+    df['zf_ratio'] = np.where(df['vol_eff'] > 0, v_abs / df['vol_eff'], 0.0)
 
-    zf_x = df['d_res'] * 10.0
-    zf_e2x = np.exp(2.0 * zf_x)
-    zf_tanh = (zf_e2x - 1.0) / (zf_e2x + 1.0)
-    df['zf_score'] = df['zf_ratio'] * zf_tanh
+    # Optimasi stabilisasi nilai Tanh (mencegah numerical overflow)
+    df['zf_score'] = df['zf_ratio'] * np.tanh(df['d_res'] * 10.0)
 
     dp_dt1 = df['close'] - df['close'].shift(1)
     dp_dt2 = df['close'].shift(1) - df['close'].shift(2)
@@ -200,6 +211,7 @@ def calculate_zf_core(df, params):
 
     return df
 
+
 def fetch_candles_for_symbol(symbol, api_key, interval="5min"):
     try:
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=250&apikey={api_key}"
@@ -215,9 +227,12 @@ def fetch_candles_for_symbol(symbol, api_key, interval="5min"):
             df['close'] = df['close'].astype(float)
             df['volume'] = df['volume'].astype(float) if 'volume' in df.columns else 0.0
             return df
+        elif "message" in res:
+            print(f"[-] TwelveData Error [{symbol}]: {res['message']}")
     except Exception as e:
         print(f"[-] Gagal fetch candle {symbol}: {e}")
     return pd.DataFrame()
+
 
 def update_all_historical_data():
     for group_name, group_cfg in ASSET_CONFIG.items():
@@ -236,11 +251,12 @@ def update_all_historical_data():
                     asset_states[sym]["d_res"] = float(last_row["d_res"])
                     asset_states[sym]["zf_score"] = float(last_row["zf_score"])
                     asset_states[sym]["raw_drift"] = float(last_row["raw_drift"])
-            time.sleep(0.4)
+            time.sleep(1.2)
+
 
 def start_websocket_for_group(group_name, api_key, symbols):
     ws_url = f"wss://ws.twelvedata.com/v1/quotes/price?apikey={api_key}"
-    
+
     def on_open(ws):
         print(f"[+] WS [{group_name}] Connected. Subscribing {symbols}")
         ws.send(json.dumps({"action": "subscribe", "params": {"symbols": ",".join(symbols)}}))
@@ -271,9 +287,10 @@ def start_websocket_for_group(group_name, api_key, symbols):
             pass
         time.sleep(5)
 
+
 def run_m91_scalper_scheduler():
     time.sleep(5)
-    
+
     while True:
         try:
             now = datetime.now()
@@ -282,7 +299,7 @@ def run_m91_scalper_scheduler():
 
             wib_time = datetime.now(timezone.utc) + timedelta(hours=7)
             time_str = wib_time.strftime("%Y-%m-%d %H:%M:00 WIB")
-            
+
             update_all_historical_data()
             category_logs = []
 
@@ -290,7 +307,7 @@ def run_m91_scalper_scheduler():
                 group_lines = [f"\n<b>[{group_name.upper()} - {group_cfg['interval']}]</b>"]
                 symbols_list = group_cfg["symbols"]
                 params = group_cfg["params"]
-                
+
                 for sym in symbols_list:
                     with state_lock:
                         st = asset_states[sym]
@@ -305,108 +322,108 @@ def run_m91_scalper_scheduler():
                     raw_buy = bool(last_row["raw_buy"])
                     raw_sell = bool(last_row["raw_sell"])
                     std_p = float(last_row["std_p"]) if not np.isnan(last_row["std_p"]) else curr_price * 0.001
-                    
-                    pos_state = st["pos_state"]
-                    sl = st["active_sl"]
-                    tp3 = st["active_tp3"]
 
-                    state_changed = False
+                    with state_lock:
+                        pos_state = st["pos_state"]
+                        sl = st["active_sl"]
+                        tp3 = st["active_tp3"]
+                        state_changed = False
 
-                    if pos_state == 1:
-                        if params["use_trailing"]:
-                            trail_sl = curr_price - (std_p * params["sigma_sl_mult"])
-                            if sl is not None and trail_sl > sl:
-                                st["active_sl"] = trail_sl
-                                sl = trail_sl
+                        if pos_state == 1:
+                            if params["use_trailing"]:
+                                trail_sl = curr_price - (std_p * params["sigma_sl_mult"])
+                                if sl is not None and trail_sl > sl:
+                                    st["active_sl"] = trail_sl
+                                    sl = trail_sl
+                                    state_changed = True
+
+                            if sl is not None and curr_price <= sl:
+                                st["pos_state"] = 0
+                                st["entry_price"] = None
                                 state_changed = True
-
-                        if sl is not None and curr_price <= sl:
-                            st["pos_state"] = 0
-                            st["entry_price"] = None
-                            state_changed = True
-                            send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
-                        elif tp3 is not None and curr_price >= tp3:
-                            st["pos_state"] = 0
-                            st["entry_price"] = None
-                            state_changed = True
-                            send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
-
-                    elif pos_state == -1:
-                        if params["use_trailing"]:
-                            trail_sl = curr_price + (std_p * params["sigma_sl_mult"])
-                            if sl is not None and trail_sl < sl:
-                                st["active_sl"] = trail_sl
-                                sl = trail_sl
+                                send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
+                            elif tp3 is not None and curr_price >= tp3:
+                                st["pos_state"] = 0
+                                st["entry_price"] = None
                                 state_changed = True
+                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
 
-                        if sl is not None and curr_price >= sl:
-                            st["pos_state"] = 0
-                            st["entry_price"] = None
+                        elif pos_state == -1:
+                            if params["use_trailing"]:
+                                trail_sl = curr_price + (std_p * params["sigma_sl_mult"])
+                                if sl is not None and trail_sl < sl:
+                                    st["active_sl"] = trail_sl
+                                    sl = trail_sl
+                                    state_changed = True
+
+                            if sl is not None and curr_price >= sl:
+                                st["pos_state"] = 0
+                                st["entry_price"] = None
+                                state_changed = True
+                                send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
+                            elif tp3 is not None and curr_price <= tp3:
+                                st["pos_state"] = 0
+                                st["entry_price"] = None
+                                state_changed = True
+                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
+
+                        buy_signal = (st["pos_state"] == 0) and raw_buy
+                        sell_signal = (st["pos_state"] == 0) and raw_sell
+
+                        if buy_signal:
+                            st["pos_state"] = 1
+                            st["entry_price"] = curr_price
+                            risk = std_p * params["sigma_sl_mult"]
+                            st["active_sl"] = curr_price - risk
+                            st["active_tp1"] = curr_price + (risk * params["rr1_ratio"])
+                            st["active_tp2"] = curr_price + (risk * params["rr2_ratio"])
+                            st["active_tp3"] = curr_price + (risk * params["rr3_ratio"])
                             state_changed = True
-                            send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
-                        elif tp3 is not None and curr_price <= tp3:
-                            st["pos_state"] = 0
-                            st["entry_price"] = None
+
+                            msg_buy = (
+                                f"🚨 <b>ZF-CORE M91 PRO BUY SIGNAL</b> 🚨\n\n"
+                                f"📂 <b>Kategori:</b> {group_name} ({group_cfg['interval']})\n"
+                                f"📊 <b>Pair:</b> {sym}\n"
+                                f"💵 <b>Entry:</b> {fmt_p(sym, curr_price)}\n"
+                                f"🛑 <b>Trailing SL:</b> {fmt_p(sym, st['active_sl'])}\n"
+                                f"🎯 <b>TP 1:</b> {fmt_p(sym, st['active_tp1'])}\n"
+                                f"🎯 <b>TP 2:</b> {fmt_p(sym, st['active_tp2'])}\n"
+                                f"🎯 <b>TP 3:</b> {fmt_p(sym, st['active_tp3'])}\n"
+                                f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                            )
+                            send_telegram_message(msg_buy)
+
+                        elif sell_signal:
+                            st["pos_state"] = -1
+                            st["entry_price"] = curr_price
+                            risk = std_p * params["sigma_sl_mult"]
+                            st["active_sl"] = curr_price + risk
+                            st["active_tp1"] = curr_price - (risk * params["rr1_ratio"])
+                            st["active_tp2"] = curr_price - (risk * params["rr2_ratio"])
+                            st["active_tp3"] = curr_price - (risk * params["rr3_ratio"])
                             state_changed = True
-                            send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
 
-                    buy_signal = (st["pos_state"] == 0) and raw_buy
-                    sell_signal = (st["pos_state"] == 0) and raw_sell
+                            msg_sell = (
+                                f"🚨 <b>ZF-CORE M91 PRO SELL SIGNAL</b> 🚨\n\n"
+                                f"📂 <b>Kategori:</b> {group_name} ({group_cfg['interval']})\n"
+                                f"📊 <b>Pair:</b> {sym}\n"
+                                f"💵 <b>Entry:</b> {fmt_p(sym, curr_price)}\n"
+                                f"🛑 <b>Trailing SL:</b> {fmt_p(sym, st['active_sl'])}\n"
+                                f"🎯 <b>TP 1:</b> {fmt_p(sym, st['active_tp1'])}\n"
+                                f"🎯 <b>TP 2:</b> {fmt_p(sym, st['active_tp2'])}\n"
+                                f"🎯 <b>TP 3:</b> {fmt_p(sym, st['active_tp3'])}\n"
+                                f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                            )
+                            send_telegram_message(msg_sell)
 
-                    if buy_signal:
-                        st["pos_state"] = 1
-                        st["entry_price"] = curr_price
-                        risk = std_p * params["sigma_sl_mult"]
-                        st["active_sl"] = curr_price - risk
-                        st["active_tp1"] = curr_price + (risk * params["rr1_ratio"])
-                        st["active_tp2"] = curr_price + (risk * params["rr2_ratio"])
-                        st["active_tp3"] = curr_price + (risk * params["rr3_ratio"])
-                        state_changed = True
+                        if state_changed:
+                            save_bot_state()
 
-                        msg_buy = (
-                            f"🚨 <b>ZF-CORE M91 PRO BUY SIGNAL</b> 🚨\n\n"
-                            f"📂 <b>Kategori:</b> {group_name} ({group_cfg['interval']})\n"
-                            f"📊 <b>Pair:</b> {sym}\n"
-                            f"💵 <b>Entry:</b> {fmt_p(sym, curr_price)}\n"
-                            f"🛑 <b>Trailing SL:</b> {fmt_p(sym, st['active_sl'])}\n"
-                            f"🎯 <b>TP 1:</b> {fmt_p(sym, st['active_tp1'])}\n"
-                            f"🎯 <b>TP 2:</b> {fmt_p(sym, st['active_tp2'])}\n"
-                            f"🎯 <b>TP 3:</b> {fmt_p(sym, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                        state_txt = "BUY" if st["pos_state"] == 1 else "SELL" if st["pos_state"] == -1 else "NEUTRAL"
+                        group_lines.append(
+                            f"• <b>{sym}</b>: {fmt_p(sym, curr_price)} | D_res: {st['d_res']:.2f}% | ZF: {st['zf_score']:.2f} | [{state_txt}]"
                         )
-                        send_telegram_message(msg_buy)
 
-                    elif sell_signal:
-                        st["pos_state"] = -1
-                        st["entry_price"] = curr_price
-                        risk = std_p * params["sigma_sl_mult"]
-                        st["active_sl"] = curr_price + risk
-                        st["active_tp1"] = curr_price - (risk * params["rr1_ratio"])
-                        st["active_tp2"] = curr_price - (risk * params["rr2_ratio"])
-                        st["active_tp3"] = curr_price - (risk * params["rr3_ratio"])
-                        state_changed = True
-
-                        msg_sell = (
-                            f"🚨 <b>ZF-CORE M91 PRO SELL SIGNAL</b> 🚨\n\n"
-                            f"📂 <b>Kategori:</b> {group_name} ({group_cfg['interval']})\n"
-                            f"📊 <b>Pair:</b> {sym}\n"
-                            f"💵 <b>Entry:</b> {fmt_p(sym, curr_price)}\n"
-                            f"🛑 <b>Trailing SL:</b> {fmt_p(sym, st['active_sl'])}\n"
-                            f"🎯 <b>TP 1:</b> {fmt_p(sym, st['active_tp1'])}\n"
-                            f"🎯 <b>TP 2:</b> {fmt_p(sym, st['active_tp2'])}\n"
-                            f"🎯 <b>TP 3:</b> {fmt_p(sym, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
-                        )
-                        send_telegram_message(msg_sell)
-
-                    if state_changed:
-                        save_bot_state()
-
-                    state_txt = "BUY" if st["pos_state"] == 1 else "SELL" if st["pos_state"] == -1 else "NEUTRAL"
-                    group_lines.append(
-                        f"• <b>{sym}</b>: {fmt_p(sym, curr_price)} | D_res: {st['d_res']:.2f}% | ZF: {st['zf_score']:.2f} | [{state_txt}]"
-                    )
-                
                 category_logs.append("\n".join(group_lines))
 
             log_msg = (
@@ -419,20 +436,21 @@ def run_m91_scalper_scheduler():
         except Exception as e:
             print(f"[-] Error Scheduler: {e}")
 
-load_bot_state()
-update_all_historical_data()
-
-for group_name, group_cfg in ASSET_CONFIG.items():
-    ws_thread = threading.Thread(
-        target=start_websocket_for_group,
-        args=(group_name, group_cfg["api_key"], group_cfg["symbols"]),
-        daemon=True
-    )
-    ws_thread.start()
-
-scheduler_thread = threading.Thread(target=run_m91_scalper_scheduler, daemon=True)
-scheduler_thread.start()
 
 if __name__ == "__main__":
+    load_bot_state()
+    update_all_historical_data()
+
+    for group_name, group_cfg in ASSET_CONFIG.items():
+        ws_thread = threading.Thread(
+            target=start_websocket_for_group,
+            args=(group_name, group_cfg["api_key"], group_cfg["symbols"]),
+            daemon=True
+        )
+        ws_thread.start()
+
+    scheduler_thread = threading.Thread(target=run_m91_scalper_scheduler, daemon=True)
+    scheduler_thread.start()
+
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
