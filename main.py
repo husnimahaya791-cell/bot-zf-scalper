@@ -6,14 +6,13 @@ import requests
 import numpy as np
 import pandas as pd
 import websocket
+import yfinance as yf
 from flask import Flask
 from datetime import datetime, timezone, timedelta
 
-# File Storage Config
 STATE_FILE = "bot_state.json"
 STATS_FILE = "trade_history.json"
 
-# Global Strategy Parameters
 GLOBAL_PARAMS = {
     "length_period": 20,
     "batas_zf": 0.55,
@@ -28,11 +27,10 @@ GLOBAL_PARAMS = {
     "use_trailing": True
 }
 
-# Optimized Asset Configuration with API <-> Display Mapping
 ASSET_CONFIG = {
     "Forex Majors": {
         "source": "twelvedata",
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_FOREX", "YOUR_API_KEY_FOREX"),
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_FOREX", ""),
         "assets": [
             {"api_symbol": "EUR/USD", "display_name": "EUR/USD"},
             {"api_symbol": "GBP/USD", "display_name": "GBP/USD"},
@@ -45,16 +43,23 @@ ASSET_CONFIG = {
         "interval": "30min",
         "params": GLOBAL_PARAMS
     },
-    "TVC Commodities": {
-        "source": "tvc",
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_TVC", "YOUR_API_KEY_TVC"),
+    "Gold TwelveData": {
+        "source": "twelvedata",
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_GOLD", ""),
         "assets": [
-            {"api_symbol": "GOLD", "display_name": "XAU/USD"},
-            {"api_symbol": "SILVER", "display_name": "XAG/USD"},
-            {"api_symbol": "USOIL", "display_name": "WTI/USD"},
-            {"api_symbol": "UKOIL", "display_name": "XBR/USD"},
+            {"api_symbol": "XAU/USD", "display_name": "XAU/USD"}
         ],
         "interval": "30min",
+        "params": GLOBAL_PARAMS
+    },
+    "YFinance Commodities": {
+        "source": "yfinance",
+        "assets": [
+            {"api_symbol": "XAGUSD=X", "display_name": "XAG"},
+            {"api_symbol": "CL=F",      "display_name": "USOIL"},
+            {"api_symbol": "BZ=F",      "display_name": "UKOIL"}
+        ],
+        "interval": "30m",
         "params": GLOBAL_PARAMS
     },
     "Crypto": {
@@ -67,10 +72,9 @@ ASSET_CONFIG = {
     }
 }
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-# Build Global Lookup Mapping for API Symbols -> Display Names
 API_TO_DISPLAY = {}
 DISPLAY_TO_ASSET = {}
 
@@ -88,7 +92,6 @@ for group_name, group_cfg in ASSET_CONFIG.items():
             "params": group_cfg["params"]
         }
 
-# Shared State Initializer
 state_lock = threading.Lock()
 asset_states = {}
 
@@ -109,7 +112,6 @@ for disp_name in DISPLAY_TO_ASSET.keys():
         "candle_history": pd.DataFrame()
     }
 
-# Connection Pooling Session
 http_session = requests.Session()
 
 
@@ -340,6 +342,26 @@ def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
                         "volume": float(k[5])
                     })
                 return pd.DataFrame(data)
+
+        elif source == "yfinance":
+            yf_interval = "30m" if "30" in interval else "1h"
+            ticker = yf.Ticker(api_symbol)
+            df_yf = ticker.history(period="7d", interval=yf_interval)
+            if not df_yf.empty:
+                df_yf = df_yf.reset_index()
+                date_col = 'Datetime' if 'Datetime' in df_yf.columns else 'Date'
+                df_yf = df_yf.rename(columns={
+                    date_col: 'datetime',
+                    'Open': 'open',
+                    'High': 'high',
+                    'Low': 'low',
+                    'Close': 'close',
+                    'Volume': 'volume'
+                })
+                df_yf['datetime'] = pd.to_datetime(df_yf['datetime'])
+                df_yf = df_yf.sort_values('datetime').reset_index(drop=True)
+                return df_yf[['datetime', 'open', 'high', 'low', 'close', 'volume']]
+
         else:
             url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval={interval}&outputsize=200&apikey={api_key}"
             res = http_session.get(url, timeout=10).json()
@@ -375,8 +397,7 @@ def update_all_historical_data():
             last_row = df_calc.iloc[-1]
             with state_lock:
                 asset_states[disp_name]["candle_history"] = df_calc
-                if asset_states[disp_name]["live_price"] == 0.0:
-                    asset_states[disp_name]["live_price"] = float(last_row["close"])
+                asset_states[disp_name]["live_price"] = float(last_row["close"])
                 asset_states[disp_name]["d_res"] = float(last_row["d_res"])
                 asset_states[disp_name]["zf_score"] = float(last_row["zf_score"])
                 asset_states[disp_name]["raw_drift"] = float(last_row["raw_drift"])
@@ -456,8 +477,8 @@ def run_m91_scalper_scheduler():
     while True:
         try:
             now = datetime.now()
-            seconds_to_next_30m = 1800 - ((now.minute % 30) * 60 + now.second) + 8
-            time.sleep(seconds_to_next_30m)
+            seconds_to_next_5m = 300 - ((now.minute % 5) * 60 + now.second)
+            time.sleep(seconds_to_next_5m)
 
             wib_time = datetime.now(timezone.utc) + timedelta(hours=7)
             time_str = wib_time.strftime("%Y-%m-%d %H:%M:00 WIB")
@@ -466,17 +487,17 @@ def run_m91_scalper_scheduler():
             curr_week_key = wib_time.strftime("%Y-W%U")
             curr_month_key = wib_time.strftime("%Y-%m")
 
-            if wib_time.hour == 0 and wib_time.minute < 35:
+            if wib_time.hour == 0 and wib_time.minute < 5:
                 if last_daily_key != curr_daily_key:
                     send_telegram_message(generate_recap(1, "REKAPAN HARIAN"))
                     last_daily_key = curr_daily_key
 
-            if wib_time.weekday() == 0 and wib_time.hour == 0 and wib_time.minute < 35:
+            if wib_time.weekday() == 0 and wib_time.hour == 0 and wib_time.minute < 5:
                 if last_weekly_key != curr_week_key:
                     send_telegram_message(generate_recap(7, "REKAPAN MINGGUAN"))
                     last_weekly_key = curr_week_key
 
-            if wib_time.day == 1 and wib_time.hour == 0 and wib_time.minute < 35:
+            if wib_time.day == 1 and wib_time.hour == 0 and wib_time.minute < 5:
                 if last_monthly_key != curr_month_key:
                     send_telegram_message(generate_recap(30, "REKAPAN BULANAN"))
                     last_monthly_key = curr_month_key
@@ -628,7 +649,7 @@ def run_m91_scalper_scheduler():
                     )
 
             log_msg = (
-                f"⚡ <b>ZF-Core Scalper M91 Pro Status</b>\n"
+                f"⚡ <b>ZF-Core Scalper M91 Pro Status (Sync 5m)</b>\n"
                 f"Waktu : {time_str}\n\n" +
                 "\n".join(flat_status_logs)
             )
@@ -638,11 +659,9 @@ def run_m91_scalper_scheduler():
             print(f"[-] Error Scheduler: {e}")
 
 
-# Initialize State and Perform Initial Load
 load_bot_state()
 update_all_historical_data()
 
-# Start Websocket Threads
 for group_name, group_cfg in ASSET_CONFIG.items():
     source = group_cfg["source"]
     if source == "binance":
@@ -651,7 +670,7 @@ for group_name, group_cfg in ASSET_CONFIG.items():
             daemon=True
         )
         ws_thread.start()
-    else:
+    elif source == "twelvedata":
         ws_thread = threading.Thread(
             target=start_websocket_twelvedata,
             args=(group_name, group_cfg["api_key"], group_cfg["assets"]),
@@ -659,7 +678,6 @@ for group_name, group_cfg in ASSET_CONFIG.items():
         )
         ws_thread.start()
 
-# Start Scheduler Thread
 scheduler_thread = threading.Thread(target=run_m91_scalper_scheduler, daemon=True)
 scheduler_thread.start()
 
