@@ -10,6 +10,7 @@ from flask import Flask
 from datetime import datetime, timezone, timedelta
 
 STATE_FILE = "bot_state.json"
+STATS_FILE = "trade_history.json"
 
 GLOBAL_PARAMS = {
     "length_period": 21,
@@ -25,28 +26,39 @@ GLOBAL_PARAMS = {
     "use_trailing": True
 }
 
-# Simbol resmi Twelve Data
 ASSET_CONFIG = {
     "Forex Majors": {
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_1", "YOUR_API_KEY_1"),
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_FOREX", "YOUR_API_KEY_FOREX"),
         "symbols": ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD", "AUD/USD", "NZD/USD"],
         "interval": "1h",
         "params": GLOBAL_PARAMS
     },
-    "Metals": {
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_2", "YOUR_API_KEY_2"),
-        "symbols": ["XAU/USD", "XAG/USD"],
+    "Gold": {
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_XAU", "YOUR_API_KEY_XAU"),
+        "symbols": ["XAU/USD"],
         "interval": "5min",
         "params": GLOBAL_PARAMS
     },
-    "Energies": {
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_3", "YOUR_API_KEY_3"),
-        "symbols": ["WTI/USD", "XBR/USD"],
+    "Silver": {
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_XAG", "YOUR_API_KEY_XAG"),
+        "symbols": ["XAG/USD"],
+        "interval": "5min",
+        "params": GLOBAL_PARAMS
+    },
+    "US Oil": {
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_WTI", "YOUR_API_KEY_WTI"),
+        "symbols": ["WTI/USD"],
+        "interval": "5min",
+        "params": GLOBAL_PARAMS
+    },
+    "UK Oil": {
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_XBR", "YOUR_API_KEY_XBR"),
+        "symbols": ["XBR/USD"],
         "interval": "5min",
         "params": GLOBAL_PARAMS
     },
     "Crypto": {
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_4", "YOUR_API_KEY_4"),
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_CRYPTO", "YOUR_API_KEY_CRYPTO"),
         "symbols": ["BTC/USD"],
         "interval": "5min",
         "params": GLOBAL_PARAMS
@@ -110,6 +122,67 @@ def load_bot_state():
             print(f"[-] Gagal memuat state: {e}")
 
 
+def log_trade_result(symbol, result_type, entry_p, exit_p):
+    try:
+        history = []
+        if os.path.exists(STATS_FILE):
+            with open(STATS_FILE, "r") as f:
+                history = json.load(f)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        history.append({
+            "timestamp": now_iso,
+            "symbol": symbol,
+            "result": result_type,
+            "entry": entry_p,
+            "exit": exit_p
+        })
+        with open(STATS_FILE, "w") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"[-] Gagal mencatat riwayat transaksi: {e}")
+
+
+def generate_recap(days, title):
+    if not os.path.exists(STATS_FILE):
+        return f"📊 <b>{title} ZF-CORE M91 PRO</b>\n\nBelum ada data transaksi yang tercatat."
+    try:
+        with open(STATS_FILE, "r") as f:
+            history = json.load(f)
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=days)
+        filtered = []
+        for h in history:
+            t = datetime.fromisoformat(h["timestamp"])
+            if t >= cutoff:
+                filtered.append(h)
+
+        if not filtered:
+            return f"📊 <b>{title} ZF-CORE M91 PRO</b>\n\nTidak ada transaksi selesai dalam periode ini."
+
+        total = len(filtered)
+        tp1_count = sum(1 for x in filtered if x["result"] == "TP1")
+        tp2_count = sum(1 for x in filtered if x["result"] == "TP2")
+        tp3_count = sum(1 for x in filtered if x["result"] == "TP3")
+        sl_count = sum(1 for x in filtered if x["result"] == "SL")
+        win_count = tp1_count + tp2_count + tp3_count
+        win_rate = (win_count / total * 100) if total > 0 else 0.0
+
+        msg = (
+            f"📊 <b>{title} ZF-CORE M91 PRO</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 <b>Total Posisi Exit:</b> {total}\n"
+            f"🎯 <b>Hit Take Profit 1:</b> {tp1_count}\n"
+            f"🎯 <b>Hit Take Profit 2:</b> {tp2_count}\n"
+            f"🎯 <b>Hit Take Profit 3:</b> {tp3_count}\n"
+            f"🛑 <b>Hit Stop Loss:</b> {sl_count}\n"
+            f"🔥 <b>Win Rate:</b> {win_rate:.1f}%\n"
+            f"━━━━━━━━━━━━━━━━━━━"
+        )
+        return msg
+    except Exception as e:
+        return f"[-] Gagal membuat rekapan: {e}"
+
+
 def fmt_p(symbol, val):
     if val is None or np.isnan(val):
         return "-"
@@ -142,13 +215,12 @@ def send_telegram_message(message):
 
 
 def calculate_zf_core(df, params):
-    if df.empty or len(df) < 200:
+    if df.empty or len(df) < 150:
         return df
 
     p = params
     df = df.copy()
 
-    # Fallback Proxy Volume
     vol_raw = df['volume'] if 'volume' in df.columns else pd.Series(0, index=df.index)
     if (vol_raw == 0).all() or (vol_raw.std() == 0):
         df['vol_eff'] = (df['high'] - df['low']).replace(0, 1e-6)
@@ -168,8 +240,10 @@ def calculate_zf_core(df, params):
     v_abs = (df['vol_eff'] - v_avg).abs()
     df['zf_ratio'] = np.where(df['vol_eff'] > 0, v_abs / df['vol_eff'], 0.0)
 
-    # Optimasi stabilisasi nilai Tanh (mencegah numerical overflow)
-    df['zf_score'] = df['zf_ratio'] * np.tanh(df['d_res'] * 10.0)
+    zf_x = df['d_res'] * 10.0
+    zf_e2x = np.exp(2.0 * zf_x)
+    zf_tanh = (zf_e2x - 1.0) / (zf_e2x + 1.0)
+    df['zf_score'] = df['zf_ratio'] * zf_tanh
 
     dp_dt1 = df['close'] - df['close'].shift(1)
     dp_dt2 = df['close'].shift(1) - df['close'].shift(2)
@@ -214,7 +288,7 @@ def calculate_zf_core(df, params):
 
 def fetch_candles_for_symbol(symbol, api_key, interval="5min"):
     try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=250&apikey={api_key}"
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=200&apikey={api_key}"
         res = requests.get(url, timeout=10).json()
         if "values" in res:
             data = res["values"]
@@ -242,7 +316,7 @@ def update_all_historical_data():
         for sym in group_cfg["symbols"]:
             df = fetch_candles_for_symbol(sym, key, interval)
             if not df.empty:
-                df_calc = calculate_zf_core(df, params)
+                df_calc = calculate_zf_core(df.tail(200), params)
                 last_row = df_calc.iloc[-1]
                 with state_lock:
                     asset_states[sym]["candle_history"] = df_calc
@@ -290,6 +364,9 @@ def start_websocket_for_group(group_name, api_key, symbols):
 
 def run_m91_scalper_scheduler():
     time.sleep(5)
+    last_daily_key = ""
+    last_weekly_key = ""
+    last_monthly_key = ""
 
     while True:
         try:
@@ -299,6 +376,28 @@ def run_m91_scalper_scheduler():
 
             wib_time = datetime.now(timezone.utc) + timedelta(hours=7)
             time_str = wib_time.strftime("%Y-%m-%d %H:%M:00 WIB")
+
+            curr_daily_key = wib_time.strftime("%Y-%m-%d")
+            curr_week_key = wib_time.strftime("%Y-W%U")
+            curr_month_key = wib_time.strftime("%Y-%m")
+
+            if wib_time.hour == 0 and wib_time.minute < 10:
+                if last_daily_key != curr_daily_key:
+                    recap_msg = generate_recap(1, "REKAPAN HARIAN")
+                    send_telegram_message(recap_msg)
+                    last_daily_key = curr_daily_key
+
+            if wib_time.weekday() == 0 and wib_time.hour == 0 and wib_time.minute < 10:
+                if last_weekly_key != curr_week_key:
+                    recap_msg = generate_recap(7, "REKAPAN MINGGUAN")
+                    send_telegram_message(recap_msg)
+                    last_weekly_key = curr_week_key
+
+            if wib_time.day == 1 and wib_time.hour == 0 and wib_time.minute < 10:
+                if last_monthly_key != curr_month_key:
+                    recap_msg = generate_recap(30, "REKAPAN BULANAN")
+                    send_telegram_message(recap_msg)
+                    last_monthly_key = curr_month_key
 
             update_all_historical_data()
             category_logs = []
@@ -326,7 +425,10 @@ def run_m91_scalper_scheduler():
                     with state_lock:
                         pos_state = st["pos_state"]
                         sl = st["active_sl"]
+                        tp1 = st["active_tp1"]
+                        tp2 = st["active_tp2"]
                         tp3 = st["active_tp3"]
+                        entry = st["entry_price"]
                         state_changed = False
 
                         if pos_state == 1:
@@ -342,11 +444,21 @@ def run_m91_scalper_scheduler():
                                 st["entry_price"] = None
                                 state_changed = True
                                 send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "SL", entry, curr_price)
                             elif tp3 is not None and curr_price >= tp3:
                                 st["pos_state"] = 0
                                 st["entry_price"] = None
                                 state_changed = True
                                 send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "TP3", entry, curr_price)
+                            elif tp2 is not None and curr_price >= tp2 and st.get("hit_tp2") is not True:
+                                st["hit_tp2"] = True
+                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 2</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "TP2", entry, curr_price)
+                            elif tp1 is not None and curr_price >= tp1 and st.get("hit_tp1") is not True:
+                                st["hit_tp1"] = True
+                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 1</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "TP1", entry, curr_price)
 
                         elif pos_state == -1:
                             if params["use_trailing"]:
@@ -361,11 +473,21 @@ def run_m91_scalper_scheduler():
                                 st["entry_price"] = None
                                 state_changed = True
                                 send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "SL", entry, curr_price)
                             elif tp3 is not None and curr_price <= tp3:
                                 st["pos_state"] = 0
                                 st["entry_price"] = None
                                 state_changed = True
                                 send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "TP3", entry, curr_price)
+                            elif tp2 is not None and curr_price <= tp2 and st.get("hit_tp2") is not True:
+                                st["hit_tp2"] = True
+                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 2</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "TP2", entry, curr_price)
+                            elif tp1 is not None and curr_price <= tp1 and st.get("hit_tp1") is not True:
+                                st["hit_tp1"] = True
+                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 1</b> @ {fmt_p(sym, curr_price)}")
+                                log_trade_result(sym, "TP1", entry, curr_price)
 
                         buy_signal = (st["pos_state"] == 0) and raw_buy
                         sell_signal = (st["pos_state"] == 0) and raw_sell
@@ -373,6 +495,8 @@ def run_m91_scalper_scheduler():
                         if buy_signal:
                             st["pos_state"] = 1
                             st["entry_price"] = curr_price
+                            st["hit_tp1"] = False
+                            st["hit_tp2"] = False
                             risk = std_p * params["sigma_sl_mult"]
                             st["active_sl"] = curr_price - risk
                             st["active_tp1"] = curr_price + (risk * params["rr1_ratio"])
@@ -396,6 +520,8 @@ def run_m91_scalper_scheduler():
                         elif sell_signal:
                             st["pos_state"] = -1
                             st["entry_price"] = curr_price
+                            st["hit_tp1"] = False
+                            st["hit_tp2"] = False
                             risk = std_p * params["sigma_sl_mult"]
                             st["active_sl"] = curr_price + risk
                             st["active_tp1"] = curr_price - (risk * params["rr1_ratio"])
@@ -437,20 +563,20 @@ def run_m91_scalper_scheduler():
             print(f"[-] Error Scheduler: {e}")
 
 
+load_bot_state()
+update_all_historical_data()
+
+for group_name, group_cfg in ASSET_CONFIG.items():
+    ws_thread = threading.Thread(
+        target=start_websocket_for_group,
+        args=(group_name, group_cfg["api_key"], group_cfg["symbols"]),
+        daemon=True
+    )
+    ws_thread.start()
+
+scheduler_thread = threading.Thread(target=run_m91_scalper_scheduler, daemon=True)
+scheduler_thread.start()
+
 if __name__ == "__main__":
-    load_bot_state()
-    update_all_historical_data()
-
-    for group_name, group_cfg in ASSET_CONFIG.items():
-        ws_thread = threading.Thread(
-            target=start_websocket_for_group,
-            args=(group_name, group_cfg["api_key"], group_cfg["symbols"]),
-            daemon=True
-        )
-        ws_thread.start()
-
-    scheduler_thread = threading.Thread(target=run_m91_scalper_scheduler, daemon=True)
-    scheduler_thread.start()
-
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
