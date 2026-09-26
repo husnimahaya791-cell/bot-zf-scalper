@@ -9,9 +9,11 @@ import websocket
 from flask import Flask
 from datetime import datetime, timezone, timedelta
 
+# File Storage Config
 STATE_FILE = "bot_state.json"
 STATS_FILE = "trade_history.json"
 
+# Global Strategy Parameters
 GLOBAL_PARAMS = {
     "length_period": 20,
     "batas_zf": 0.55,
@@ -26,24 +28,40 @@ GLOBAL_PARAMS = {
     "use_trailing": True
 }
 
+# Optimized Asset Configuration with API <-> Display Mapping
 ASSET_CONFIG = {
     "Forex Majors": {
         "source": "twelvedata",
         "api_key": os.environ.get("TWELVEDATA_API_KEY_FOREX", "YOUR_API_KEY_FOREX"),
-        "symbols": ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "USD/CAD", "AUD/USD", "NZD/USD"],
+        "assets": [
+            {"api_symbol": "EUR/USD", "display_name": "EUR/USD"},
+            {"api_symbol": "GBP/USD", "display_name": "GBP/USD"},
+            {"api_symbol": "USD/JPY", "display_name": "USD/JPY"},
+            {"api_symbol": "USD/CHF", "display_name": "USD/CHF"},
+            {"api_symbol": "USD/CAD", "display_name": "USD/CAD"},
+            {"api_symbol": "AUD/USD", "display_name": "AUD/USD"},
+            {"api_symbol": "NZD/USD", "display_name": "NZD/USD"},
+        ],
         "interval": "30min",
         "params": GLOBAL_PARAMS
     },
     "TVC Commodities": {
         "source": "tvc",
         "api_key": os.environ.get("TWELVEDATA_API_KEY_TVC", "YOUR_API_KEY_TVC"),
-        "symbols": ["XAU/USD", "XAG/USD", "WTI/USD", "XBR/USD"],
+        "assets": [
+            {"api_symbol": "GOLD", "display_name": "XAU/USD"},
+            {"api_symbol": "SILVER", "display_name": "XAG/USD"},
+            {"api_symbol": "USOIL", "display_name": "WTI/USD"},
+            {"api_symbol": "UKOIL", "display_name": "XBR/USD"},
+        ],
         "interval": "30min",
         "params": GLOBAL_PARAMS
     },
     "Crypto": {
         "source": "binance",
-        "symbols": ["BTC/USD"],
+        "assets": [
+            {"api_symbol": "BTCUSDT", "display_name": "BTC/USD"}
+        ],
         "interval": "30m",
         "params": GLOBAL_PARAMS
     }
@@ -52,13 +70,30 @@ ASSET_CONFIG = {
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
-SYMBOLS = [sym for group in ASSET_CONFIG.values() for sym in group["symbols"]]
+# Build Global Lookup Mapping for API Symbols -> Display Names
+API_TO_DISPLAY = {}
+DISPLAY_TO_ASSET = {}
 
+for group_name, group_cfg in ASSET_CONFIG.items():
+    for item in group_cfg["assets"]:
+        api_sym = item["api_symbol"]
+        disp_name = item["display_name"]
+        API_TO_DISPLAY[api_sym] = disp_name
+        DISPLAY_TO_ASSET[disp_name] = {
+            "group": group_name,
+            "api_symbol": api_sym,
+            "source": group_cfg["source"],
+            "api_key": group_cfg.get("api_key", ""),
+            "interval": group_cfg["interval"],
+            "params": group_cfg["params"]
+        }
+
+# Shared State Initializer
 state_lock = threading.Lock()
 asset_states = {}
 
-for sym in SYMBOLS:
-    asset_states[sym] = {
+for disp_name in DISPLAY_TO_ASSET.keys():
+    asset_states[disp_name] = {
         "live_price": 0.0,
         "d_res": 0.0,
         "zf_score": 0.0,
@@ -69,8 +104,13 @@ for sym in SYMBOLS:
         "active_tp1": None,
         "active_tp2": None,
         "active_tp3": None,
+        "hit_tp1": False,
+        "hit_tp2": False,
         "candle_history": pd.DataFrame()
     }
+
+# Connection Pooling Session
+http_session = requests.Session()
 
 
 def save_bot_state():
@@ -85,6 +125,8 @@ def save_bot_state():
                     "active_tp1": st["active_tp1"],
                     "active_tp2": st["active_tp2"],
                     "active_tp3": st["active_tp3"],
+                    "hit_tp1": st.get("hit_tp1", False),
+                    "hit_tp2": st.get("hit_tp2", False),
                 }
         with open(STATE_FILE, "w") as f:
             json.dump(data_to_save, f, indent=2)
@@ -188,7 +230,7 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        http_session.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"[-] Telegram Exception: {e}")
 
@@ -259,17 +301,33 @@ def calculate_zf_core(df, params):
 
     df['std_p'] = df['close'].rolling(window=p['length_period']).std()
 
-    df['raw_buy'] = (df['raw_drift'] < 0) & (df['d_res'] >= p['min_drift']) & (df['zf_score'] >= p['batas_zf']) & df['is_inflection'] & df['is_fractal'] & df['is_fvg'] & df['trend_buy']
-    df['raw_sell'] = (df['raw_drift'] > 0) & (df['d_res'] >= p['min_drift']) & (df['zf_score'] >= p['batas_zf']) & df['is_inflection'] & df['is_fractal'] & df['is_fvg'] & df['trend_sell']
+    df['raw_buy'] = (
+        (df['raw_drift'] < 0) &
+        (df['d_res'] >= p['min_drift']) &
+        (df['zf_score'] >= p['batas_zf']) &
+        df['is_inflection'] &
+        df['is_fractal'] &
+        df['is_fvg'] &
+        df['trend_buy']
+    )
+    df['raw_sell'] = (
+        (df['raw_drift'] > 0) &
+        (df['d_res'] >= p['min_drift']) &
+        (df['zf_score'] >= p['batas_zf']) &
+        df['is_inflection'] &
+        df['is_fractal'] &
+        df['is_fvg'] &
+        df['trend_sell']
+    )
 
     return df
 
 
-def fetch_candles_for_symbol(symbol, source, api_key="", interval="30min"):
+def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
     try:
         if source == "binance":
-            url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=30m&limit=200"
-            res = requests.get(url, timeout=10).json()
+            url = f"https://api.binance.com/api/v3/klines?symbol={api_symbol}&interval={interval}&limit=200"
+            res = http_session.get(url, timeout=10).json()
             if isinstance(res, list) and len(res) > 0:
                 data = []
                 for k in res:
@@ -283,8 +341,8 @@ def fetch_candles_for_symbol(symbol, source, api_key="", interval="30min"):
                     })
                 return pd.DataFrame(data)
         else:
-            url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=200&apikey={api_key}"
-            res = requests.get(url, timeout=10).json()
+            url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval={interval}&outputsize=200&apikey={api_key}"
+            res = http_session.get(url, timeout=10).json()
             if "values" in res:
                 data = res["values"]
                 df = pd.DataFrame(data)
@@ -296,30 +354,33 @@ def fetch_candles_for_symbol(symbol, source, api_key="", interval="30min"):
                 df['close'] = df['close'].astype(float)
                 df['volume'] = df['volume'].astype(float) if 'volume' in df.columns else 0.0
                 return df
+            elif "message" in res:
+                print(f"[-] TwelveData Error [{api_symbol}]: {res['message']}")
     except Exception as e:
-        print(f"[-] Fetch error [{symbol}]: {e}")
+        print(f"[-] Fetch error [{api_symbol}]: {e}")
     return pd.DataFrame()
 
 
 def update_all_historical_data():
-    for group_name, group_cfg in ASSET_CONFIG.items():
-        source = group_cfg["source"]
-        key = group_cfg.get("api_key", "")
-        interval = group_cfg["interval"]
-        params = group_cfg["params"]
-        for sym in group_cfg["symbols"]:
-            df = fetch_candles_for_symbol(sym, source, key, interval)
-            if not df.empty:
-                df_calc = calculate_zf_core(df.tail(200), params)
-                last_row = df_calc.iloc[-1]
-                with state_lock:
-                    asset_states[sym]["candle_history"] = df_calc
-                    if asset_states[sym]["live_price"] == 0.0:
-                        asset_states[sym]["live_price"] = float(last_row["close"])
-                    asset_states[sym]["d_res"] = float(last_row["d_res"])
-                    asset_states[sym]["zf_score"] = float(last_row["zf_score"])
-                    asset_states[sym]["raw_drift"] = float(last_row["raw_drift"])
-            time.sleep(1.0)
+    for disp_name, info in DISPLAY_TO_ASSET.items():
+        api_sym = info["api_symbol"]
+        source = info["source"]
+        key = info["api_key"]
+        interval = info["interval"]
+        params = info["params"]
+
+        df = fetch_candles_for_symbol(api_sym, source, key, interval)
+        if not df.empty:
+            df_calc = calculate_zf_core(df.tail(200), params)
+            last_row = df_calc.iloc[-1]
+            with state_lock:
+                asset_states[disp_name]["candle_history"] = df_calc
+                if asset_states[disp_name]["live_price"] == 0.0:
+                    asset_states[disp_name]["live_price"] = float(last_row["close"])
+                asset_states[disp_name]["d_res"] = float(last_row["d_res"])
+                asset_states[disp_name]["zf_score"] = float(last_row["zf_score"])
+                asset_states[disp_name]["raw_drift"] = float(last_row["raw_drift"])
+        time.sleep(0.5)
 
 
 def start_websocket_binance():
@@ -350,21 +411,24 @@ def start_websocket_binance():
         time.sleep(5)
 
 
-def start_websocket_twelvedata(group_name, api_key, symbols):
+def start_websocket_twelvedata(group_name, api_key, assets):
+    api_symbols = [item["api_symbol"] for item in assets]
     ws_url = f"wss://ws.twelvedata.com/v1/quotes/price?apikey={api_key}"
 
     def on_open(ws):
-        ws.send(json.dumps({"action": "subscribe", "params": {"symbols": ",".join(symbols)}}))
+        ws.send(json.dumps({"action": "subscribe", "params": {"symbols": ",".join(api_symbols)}}))
 
     def on_message(ws, message):
         try:
             data = json.loads(message)
             if data.get("event") == "price":
-                sym = data.get("symbol")
+                raw_sym = data.get("symbol")
                 price = float(data.get("price", 0))
-                if sym in asset_states and price > 0:
+
+                disp_name = API_TO_DISPLAY.get(raw_sym)
+                if disp_name and disp_name in asset_states and price > 0:
                     with state_lock:
-                        asset_states[sym]["live_price"] = price
+                        asset_states[disp_name]["live_price"] = price
         except Exception:
             pass
 
@@ -420,150 +484,148 @@ def run_m91_scalper_scheduler():
             update_all_historical_data()
             flat_status_logs = []
 
-            for group_name, group_cfg in ASSET_CONFIG.items():
-                symbols_list = group_cfg["symbols"]
-                params = group_cfg["params"]
+            for disp_name, info in DISPLAY_TO_ASSET.items():
+                params = info["params"]
 
-                for sym in symbols_list:
-                    with state_lock:
-                        st = asset_states[sym]
-                        df = st["candle_history"]
-                        curr_price = st["live_price"]
+                with state_lock:
+                    st = asset_states[disp_name]
+                    df = st["candle_history"]
+                    curr_price = st["live_price"]
 
-                    if df.empty or len(df) < 5:
-                        flat_status_logs.append(f"• <b>{sym}</b>: Data belum siap")
-                        continue
+                if df.empty or len(df) < 5:
+                    flat_status_logs.append(f"• <b>{disp_name}</b>: Data belum siap")
+                    continue
 
-                    last_row = df.iloc[-1]
-                    raw_buy = bool(last_row["raw_buy"])
-                    raw_sell = bool(last_row["raw_sell"])
-                    std_p = float(last_row["std_p"]) if not np.isnan(last_row["std_p"]) else curr_price * 0.001
+                last_row = df.iloc[-1]
+                raw_buy = bool(last_row["raw_buy"])
+                raw_sell = bool(last_row["raw_sell"])
+                std_p = float(last_row["std_p"]) if not np.isnan(last_row["std_p"]) else curr_price * 0.001
 
-                    with state_lock:
-                        pos_state = st["pos_state"]
-                        sl = st["active_sl"]
-                        tp1 = st["active_tp1"]
-                        tp2 = st["active_tp2"]
-                        tp3 = st["active_tp3"]
-                        entry = st["entry_price"]
-                        state_changed = False
+                with state_lock:
+                    pos_state = st["pos_state"]
+                    sl = st["active_sl"]
+                    tp1 = st["active_tp1"]
+                    tp2 = st["active_tp2"]
+                    tp3 = st["active_tp3"]
+                    entry = st["entry_price"]
+                    state_changed = False
 
-                        if pos_state == 1:
-                            if params["use_trailing"]:
-                                trail_sl = curr_price - (std_p * params["sigma_sl_mult"])
-                                if sl is not None and trail_sl > sl:
-                                    st["active_sl"] = trail_sl
-                                    sl = trail_sl
-                                    state_changed = True
-
-                            if sl is not None and curr_price <= sl:
-                                st["pos_state"] = 0
-                                st["entry_price"] = None
+                    if pos_state == 1:
+                        if params["use_trailing"]:
+                            trail_sl = curr_price - (std_p * params["sigma_sl_mult"])
+                            if sl is not None and trail_sl > sl:
+                                st["active_sl"] = trail_sl
+                                sl = trail_sl
                                 state_changed = True
-                                send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "SL", entry, curr_price)
-                            elif tp3 is not None and curr_price >= tp3:
-                                st["pos_state"] = 0
-                                st["entry_price"] = None
-                                state_changed = True
-                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "TP3", entry, curr_price)
-                            elif tp2 is not None and curr_price >= tp2 and st.get("hit_tp2") is not True:
-                                st["hit_tp2"] = True
-                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 2</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "TP2", entry, curr_price)
-                            elif tp1 is not None and curr_price >= tp1 and st.get("hit_tp1") is not True:
-                                st["hit_tp1"] = True
-                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 1</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "TP1", entry, curr_price)
 
-                        elif pos_state == -1:
-                            if params["use_trailing"]:
-                                trail_sl = curr_price + (std_p * params["sigma_sl_mult"])
-                                if sl is not None and trail_sl < sl:
-                                    st["active_sl"] = trail_sl
-                                    sl = trail_sl
-                                    state_changed = True
-
-                            if sl is not None and curr_price >= sl:
-                                st["pos_state"] = 0
-                                st["entry_price"] = None
-                                state_changed = True
-                                send_telegram_message(f"🛑 <b>{sym} HIT STOP LOSS (EXIT)</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "SL", entry, curr_price)
-                            elif tp3 is not None and curr_price <= tp3:
-                                st["pos_state"] = 0
-                                st["entry_price"] = None
-                                state_changed = True
-                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "TP3", entry, curr_price)
-                            elif tp2 is not None and curr_price <= tp2 and st.get("hit_tp2") is not True:
-                                st["hit_tp2"] = True
-                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 2</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "TP2", entry, curr_price)
-                            elif tp1 is not None and curr_price <= tp1 and st.get("hit_tp1") is not True:
-                                st["hit_tp1"] = True
-                                send_telegram_message(f"🎯 <b>{sym} HIT TAKE PROFIT 1</b> @ {fmt_p(sym, curr_price)}")
-                                log_trade_result(sym, "TP1", entry, curr_price)
-
-                        buy_signal = (st["pos_state"] == 0) and raw_buy
-                        sell_signal = (st["pos_state"] == 0) and raw_sell
-
-                        if buy_signal:
-                            st["pos_state"] = 1
-                            st["entry_price"] = curr_price
-                            st["hit_tp1"] = False
-                            st["hit_tp2"] = False
-                            risk = std_p * params["sigma_sl_mult"]
-                            st["active_sl"] = curr_price - risk
-                            st["active_tp1"] = curr_price + (risk * params["rr1_ratio"])
-                            st["active_tp2"] = curr_price + (risk * params["rr2_ratio"])
-                            st["active_tp3"] = curr_price + (risk * params["rr3_ratio"])
+                        if sl is not None and curr_price <= sl:
+                            st["pos_state"] = 0
+                            st["entry_price"] = None
                             state_changed = True
-
-                            msg_buy = (
-                                f"🚨 <b>ZF-CORE M91 PRO BUY SIGNAL</b> 🚨\n\n"
-                                f"📊 <b>Pair:</b> {sym}\n"
-                                f"💵 <b>Entry:</b> {fmt_p(sym, curr_price)}\n"
-                                f"🛑 <b>Trailing SL:</b> {fmt_p(sym, st['active_sl'])}\n"
-                                f"🎯 <b>TP 1:</b> {fmt_p(sym, st['active_tp1'])}\n"
-                                f"🎯 <b>TP 2:</b> {fmt_p(sym, st['active_tp2'])}\n"
-                                f"🎯 <b>TP 3:</b> {fmt_p(sym, st['active_tp3'])}\n"
-                                f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
-                            )
-                            send_telegram_message(msg_buy)
-
-                        elif sell_signal:
-                            st["pos_state"] = -1
-                            st["entry_price"] = curr_price
-                            st["hit_tp1"] = False
-                            st["hit_tp2"] = False
-                            risk = std_p * params["sigma_sl_mult"]
-                            st["active_sl"] = curr_price + risk
-                            st["active_tp1"] = curr_price - (risk * params["rr1_ratio"])
-                            st["active_tp2"] = curr_price - (risk * params["rr2_ratio"])
-                            st["active_tp3"] = curr_price - (risk * params["rr3_ratio"])
+                            send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "SL", entry, curr_price)
+                        elif tp3 is not None and curr_price >= tp3:
+                            st["pos_state"] = 0
+                            st["entry_price"] = None
                             state_changed = True
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "TP3", entry, curr_price)
+                        elif tp2 is not None and curr_price >= tp2 and st.get("hit_tp2") is not True:
+                            st["hit_tp2"] = True
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "TP2", entry, curr_price)
+                        elif tp1 is not None and curr_price >= tp1 and st.get("hit_tp1") is not True:
+                            st["hit_tp1"] = True
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "TP1", entry, curr_price)
 
-                            msg_sell = (
-                                f"🚨 <b>ZF-CORE M91 PRO SELL SIGNAL</b> 🚨\n\n"
-                                f"📊 <b>Pair:</b> {sym}\n"
-                                f"💵 <b>Entry:</b> {fmt_p(sym, curr_price)}\n"
-                                f"🛑 <b>Trailing SL:</b> {fmt_p(sym, st['active_sl'])}\n"
-                                f"🎯 <b>TP 1:</b> {fmt_p(sym, st['active_tp1'])}\n"
-                                f"🎯 <b>TP 2:</b> {fmt_p(sym, st['active_tp2'])}\n"
-                                f"🎯 <b>TP 3:</b> {fmt_p(sym, st['active_tp3'])}\n"
-                                f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
-                            )
-                            send_telegram_message(msg_sell)
+                    elif pos_state == -1:
+                        if params["use_trailing"]:
+                            trail_sl = curr_price + (std_p * params["sigma_sl_mult"])
+                            if sl is not None and trail_sl < sl:
+                                st["active_sl"] = trail_sl
+                                sl = trail_sl
+                                state_changed = True
 
-                        if state_changed:
-                            save_bot_state()
+                        if sl is not None and curr_price >= sl:
+                            st["pos_state"] = 0
+                            st["entry_price"] = None
+                            state_changed = True
+                            send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "SL", entry, curr_price)
+                        elif tp3 is not None and curr_price <= tp3:
+                            st["pos_state"] = 0
+                            st["entry_price"] = None
+                            state_changed = True
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "TP3", entry, curr_price)
+                        elif tp2 is not None and curr_price <= tp2 and st.get("hit_tp2") is not True:
+                            st["hit_tp2"] = True
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "TP2", entry, curr_price)
+                        elif tp1 is not None and curr_price <= tp1 and st.get("hit_tp1") is not True:
+                            st["hit_tp1"] = True
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}")
+                            log_trade_result(disp_name, "TP1", entry, curr_price)
 
-                        state_txt = "BUY" if st["pos_state"] == 1 else "SELL" if st["pos_state"] == -1 else "NEUTRAL"
-                        flat_status_logs.append(
-                            f"• <b>{sym}</b>: {fmt_p(sym, curr_price)} | D_res: {st['d_res']:.2f}% | ZF: {st['zf_score']:.2f} | [{state_txt}]"
+                    buy_signal = (st["pos_state"] == 0) and raw_buy
+                    sell_signal = (st["pos_state"] == 0) and raw_sell
+
+                    if buy_signal:
+                        st["pos_state"] = 1
+                        st["entry_price"] = curr_price
+                        st["hit_tp1"] = False
+                        st["hit_tp2"] = False
+                        risk = std_p * params["sigma_sl_mult"]
+                        st["active_sl"] = curr_price - risk
+                        st["active_tp1"] = curr_price + (risk * params["rr1_ratio"])
+                        st["active_tp2"] = curr_price + (risk * params["rr2_ratio"])
+                        st["active_tp3"] = curr_price + (risk * params["rr3_ratio"])
+                        state_changed = True
+
+                        msg_buy = (
+                            f"🚨 <b>ZF-CORE M91 PRO BUY SIGNAL</b> 🚨\n\n"
+                            f"📊 <b>Pair:</b> {disp_name}\n"
+                            f"💵 <b>Entry:</b> {fmt_p(disp_name, curr_price)}\n"
+                            f"🛑 <b>Trailing SL:</b> {fmt_p(disp_name, st['active_sl'])}\n"
+                            f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
+                            f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
+                            f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
+                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
                         )
+                        send_telegram_message(msg_buy)
+
+                    elif sell_signal:
+                        st["pos_state"] = -1
+                        st["entry_price"] = curr_price
+                        st["hit_tp1"] = False
+                        st["hit_tp2"] = False
+                        risk = std_p * params["sigma_sl_mult"]
+                        st["active_sl"] = curr_price + risk
+                        st["active_tp1"] = curr_price - (risk * params["rr1_ratio"])
+                        st["active_tp2"] = curr_price - (risk * params["rr2_ratio"])
+                        st["active_tp3"] = curr_price - (risk * params["rr3_ratio"])
+                        state_changed = True
+
+                        msg_sell = (
+                            f"🚨 <b>ZF-CORE M91 PRO SELL SIGNAL</b> 🚨\n\n"
+                            f"📊 <b>Pair:</b> {disp_name}\n"
+                            f"💵 <b>Entry:</b> {fmt_p(disp_name, curr_price)}\n"
+                            f"🛑 <b>Trailing SL:</b> {fmt_p(disp_name, st['active_sl'])}\n"
+                            f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
+                            f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
+                            f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
+                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                        )
+                        send_telegram_message(msg_sell)
+
+                    if state_changed:
+                        save_bot_state()
+
+                    state_txt = "BUY" if st["pos_state"] == 1 else "SELL" if st["pos_state"] == -1 else "NEUTRAL"
+                    flat_status_logs.append(
+                        f"• <b>{disp_name}</b>: {fmt_p(disp_name, curr_price)} | D_res: {st['d_res']:.2f}% | ZF: {st['zf_score']:.2f} | [{state_txt}]"
+                    )
 
             log_msg = (
                 f"⚡ <b>ZF-Core Scalper M91 Pro Status</b>\n"
@@ -576,9 +638,11 @@ def run_m91_scalper_scheduler():
             print(f"[-] Error Scheduler: {e}")
 
 
+# Initialize State and Perform Initial Load
 load_bot_state()
 update_all_historical_data()
 
+# Start Websocket Threads
 for group_name, group_cfg in ASSET_CONFIG.items():
     source = group_cfg["source"]
     if source == "binance":
@@ -590,11 +654,12 @@ for group_name, group_cfg in ASSET_CONFIG.items():
     else:
         ws_thread = threading.Thread(
             target=start_websocket_twelvedata,
-            args=(group_name, group_cfg["api_key"], group_cfg["symbols"]),
+            args=(group_name, group_cfg["api_key"], group_cfg["assets"]),
             daemon=True
         )
         ws_thread.start()
 
+# Start Scheduler Thread
 scheduler_thread = threading.Thread(target=run_m91_scalper_scheduler, daemon=True)
 scheduler_thread.start()
 
