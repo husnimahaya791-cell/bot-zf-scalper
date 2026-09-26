@@ -55,7 +55,7 @@ ASSET_CONFIG = {
     "YFinance Commodities": {
         "source": "yfinance",
         "assets": [
-            {"api_symbol": "XAGUSD=X", "display_name": "XAG"},
+            {"api_symbol": "SI=F", "display_name": "XAG/USD"},
             {"api_symbol": "CL=F",      "display_name": "USOIL"},
             {"api_symbol": "BZ=F",      "display_name": "UKOIL"}
         ],
