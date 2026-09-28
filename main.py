@@ -75,6 +75,7 @@ ASSET_CONFIG = {
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_GRUP_ID = os.environ.get("TELEGRAM_GRUP_ID", "")
 
 API_TO_DISPLAY = {}
 DISPLAY_TO_ASSET = {}
