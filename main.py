@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 
 STATE_FILE = "bot_state.json"
 STATS_FILE = "trade_history.json"
+RECAP_FILE = "recap_state.json"
 
 GLOBAL_PARAMS = {
     "length_period": 20,
@@ -49,15 +50,15 @@ ASSET_CONFIG = {
         "assets": [
             {"api_symbol": "XAU/USD", "display_name": "XAU/USD"}
         ],
-        "interval": "30min",
+        "interval": "5min",
         "params": GLOBAL_PARAMS
     },
     "YFinance Commodities": {
         "source": "yfinance",
         "assets": [
             {"api_symbol": "SI=F", "display_name": "XAG/USD"},
-            {"api_symbol": "CL=F",      "display_name": "USOIL"},
-            {"api_symbol": "BZ=F",      "display_name": "UKOIL"}
+            {"api_symbol": "CL=F", "display_name": "USOIL"},
+            {"api_symbol": "BZ=F", "display_name": "UKOIL"}
         ],
         "interval": "30m",
         "params": GLOBAL_PARAMS
@@ -67,7 +68,7 @@ ASSET_CONFIG = {
         "assets": [
             {"api_symbol": "BTCUSDT", "display_name": "BTC/USD"}
         ],
-        "interval": "30m",
+        "interval": "5m",
         "params": GLOBAL_PARAMS
     }
 }
@@ -114,7 +115,6 @@ for disp_name in DISPLAY_TO_ASSET.keys():
 
 http_session = requests.Session()
 
-
 def save_bot_state():
     try:
         data_to_save = {}
@@ -132,9 +132,8 @@ def save_bot_state():
                 }
         with open(STATE_FILE, "w") as f:
             json.dump(data_to_save, f, indent=2)
-    except Exception as e:
-        print(f"[-] Gagal menyimpan state: {e}")
-
+    except Exception:
+        pass
 
 def load_bot_state():
     if os.path.exists(STATE_FILE):
@@ -145,10 +144,24 @@ def load_bot_state():
                 for sym, st in saved_data.items():
                     if sym in asset_states:
                         asset_states[sym].update(st)
-            print("[+] Berhasil memuat state posisi.")
-        except Exception as e:
-            print(f"[-] Gagal memuat state: {e}")
+        except Exception:
+            pass
 
+def load_recap_state():
+    if os.path.exists(RECAP_FILE):
+        try:
+            with open(RECAP_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"daily": "", "weekly": "", "monthly": ""}
+
+def save_recap_state(state):
+    try:
+        with open(RECAP_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
 
 def log_trade_result(symbol, result_type, entry_p, exit_p):
     try:
@@ -166,9 +179,8 @@ def log_trade_result(symbol, result_type, entry_p, exit_p):
         })
         with open(STATS_FILE, "w") as f:
             json.dump(history, f, indent=2)
-    except Exception as e:
-        print(f"[-] Gagal mencatat riwayat: {e}")
-
+    except Exception:
+        pass
 
 def generate_recap(days, title):
     if not os.path.exists(STATS_FILE):
@@ -179,10 +191,10 @@ def generate_recap(days, title):
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=days)
         filtered = [h for h in history if datetime.fromisoformat(h["timestamp"]) >= cutoff]
-
+        
         if not filtered:
             return f"📊 <b>{title} ZF-CORE M91 PRO</b>\n\nTidak ada transaksi selesai dalam periode ini."
-
+            
         total = len(filtered)
         tp1_count = sum(1 for x in filtered if x["result"] == "TP1")
         tp2_count = sum(1 for x in filtered if x["result"] == "TP2")
@@ -203,8 +215,7 @@ def generate_recap(days, title):
             f"━━━━━━━━━━━━━━━━━━━"
         )
     except Exception as e:
-        return f"[-] Gagal membuat rekapan: {e}"
-
+        return f"Gagal membuat rekapan: {e}"
 
 def fmt_p(symbol, val):
     if val is None or np.isnan(val):
@@ -217,14 +228,11 @@ def fmt_p(symbol, val):
     else:
         return f"{val:,.2f}"
 
-
 app = Flask(__name__)
-
 
 @app.route('/')
 def home():
     return "ZF-Core Scalper M91 Pro: Active", 200
-
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -233,9 +241,8 @@ def send_telegram_message(message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
         http_session.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"[-] Telegram Exception: {e}")
-
+    except Exception:
+        pass
 
 def calculate_zf_core(df, params):
     if df.empty or len(df) < 150:
@@ -312,6 +319,7 @@ def calculate_zf_core(df, params):
         df['is_fvg'] &
         df['trend_buy']
     )
+    
     df['raw_sell'] = (
         (df['raw_drift'] > 0) &
         (df['d_res'] >= p['min_drift']) &
@@ -323,7 +331,6 @@ def calculate_zf_core(df, params):
     )
 
     return df
-
 
 def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
     try:
@@ -342,9 +349,9 @@ def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
                         "volume": float(k[5])
                     })
                 return pd.DataFrame(data)
-
+                
         elif source == "yfinance":
-            yf_interval = "30m" if "30" in interval else "1h"
+            yf_interval = interval.replace("min", "m")
             ticker = yf.Ticker(api_symbol)
             df_yf = ticker.history(period="7d", interval=yf_interval)
             if not df_yf.empty:
@@ -361,7 +368,7 @@ def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
                 df_yf['datetime'] = pd.to_datetime(df_yf['datetime'])
                 df_yf = df_yf.sort_values('datetime').reset_index(drop=True)
                 return df_yf[['datetime', 'open', 'high', 'low', 'close', 'volume']]
-
+                
         else:
             url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval={interval}&outputsize=200&apikey={api_key}"
             res = http_session.get(url, timeout=10).json()
@@ -376,12 +383,9 @@ def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
                 df['close'] = df['close'].astype(float)
                 df['volume'] = df['volume'].astype(float) if 'volume' in df.columns else 0.0
                 return df
-            elif "message" in res:
-                print(f"[-] TwelveData Error [{api_symbol}]: {res['message']}")
-    except Exception as e:
-        print(f"[-] Fetch error [{api_symbol}]: {e}")
+    except Exception:
+        pass
     return pd.DataFrame()
-
 
 def update_all_historical_data():
     for disp_name, info in DISPLAY_TO_ASSET.items():
@@ -402,7 +406,6 @@ def update_all_historical_data():
                 asset_states[disp_name]["zf_score"] = float(last_row["zf_score"])
                 asset_states[disp_name]["raw_drift"] = float(last_row["raw_drift"])
         time.sleep(0.5)
-
 
 def start_websocket_binance():
     ws_url = "wss://stream.binance.com:9443/ws/btcusdt@trade"
@@ -431,7 +434,6 @@ def start_websocket_binance():
             pass
         time.sleep(5)
 
-
 def start_websocket_twelvedata(group_name, api_key, assets):
     api_symbols = [item["api_symbol"] for item in assets]
     ws_url = f"wss://ws.twelvedata.com/v1/quotes/price?apikey={api_key}"
@@ -445,7 +447,6 @@ def start_websocket_twelvedata(group_name, api_key, assets):
             if data.get("event") == "price":
                 raw_sym = data.get("symbol")
                 price = float(data.get("price", 0))
-
                 disp_name = API_TO_DISPLAY.get(raw_sym)
                 if disp_name and disp_name in asset_states and price > 0:
                     with state_lock:
@@ -467,12 +468,9 @@ def start_websocket_twelvedata(group_name, api_key, assets):
             pass
         time.sleep(5)
 
-
 def run_m91_scalper_scheduler():
     time.sleep(5)
-    last_daily_key = ""
-    last_weekly_key = ""
-    last_monthly_key = ""
+    recap_state = load_recap_state()
 
     while True:
         try:
@@ -487,36 +485,36 @@ def run_m91_scalper_scheduler():
             curr_week_key = wib_time.strftime("%Y-W%U")
             curr_month_key = wib_time.strftime("%Y-%m")
 
-            if wib_time.hour == 0 and wib_time.minute < 5:
-                if last_daily_key != curr_daily_key:
-                    send_telegram_message(generate_recap(1, "REKAPAN HARIAN"))
-                    last_daily_key = curr_daily_key
+            if recap_state.get("daily") != curr_daily_key:
+                send_telegram_message(generate_recap(1, "REKAPAN HARIAN"))
+                recap_state["daily"] = curr_daily_key
+                save_recap_state(recap_state)
 
-            if wib_time.weekday() == 0 and wib_time.hour == 0 and wib_time.minute < 5:
-                if last_weekly_key != curr_week_key:
-                    send_telegram_message(generate_recap(7, "REKAPAN MINGGUAN"))
-                    last_weekly_key = curr_week_key
+            if wib_time.weekday() == 0 and recap_state.get("weekly") != curr_week_key:
+                send_telegram_message(generate_recap(7, "REKAPAN MINGGUAN"))
+                recap_state["weekly"] = curr_week_key
+                save_recap_state(recap_state)
 
-            if wib_time.day == 1 and wib_time.hour == 0 and wib_time.minute < 5:
-                if last_monthly_key != curr_month_key:
-                    send_telegram_message(generate_recap(30, "REKAPAN BULANAN"))
-                    last_monthly_key = curr_month_key
+            if wib_time.day == 1 and recap_state.get("monthly") != curr_month_key:
+                send_telegram_message(generate_recap(30, "REKAPAN BULANAN"))
+                recap_state["monthly"] = curr_month_key
+                save_recap_state(recap_state)
 
             update_all_historical_data()
             flat_status_logs = []
 
             for disp_name, info in DISPLAY_TO_ASSET.items():
                 params = info["params"]
-
+                
                 with state_lock:
                     st = asset_states[disp_name]
                     df = st["candle_history"]
                     curr_price = st["live_price"]
-
+                    
                 if df.empty or len(df) < 5:
                     flat_status_logs.append(f"• <b>{disp_name}</b>: Data belum siap")
                     continue
-
+                    
                 last_row = df.iloc[-1]
                 raw_buy = bool(last_row["raw_buy"])
                 raw_sell = bool(last_row["raw_sell"])
@@ -656,8 +654,7 @@ def run_m91_scalper_scheduler():
             send_telegram_message(log_msg)
 
         except Exception as e:
-            print(f"[-] Error Scheduler: {e}")
-
+            pass
 
 load_bot_state()
 update_all_historical_data()
