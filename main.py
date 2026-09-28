@@ -74,8 +74,8 @@ ASSET_CONFIG = {
 }
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-TELEGRAM_GRUP_ID = os.environ.get("TELEGRAM_GRUP_ID", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "") # Ini untuk DM (Log Rutin)
+TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID", "") # Tambahan: Ini untuk Grup (Sinyal)
 
 API_TO_DISPLAY = {}
 DISPLAY_TO_ASSET = {}
@@ -235,11 +235,14 @@ app = Flask(__name__)
 def home():
     return "ZF-Core Scalper M91 Pro: Active", 200
 
-def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+def send_telegram_message(message, target_chat_id=None):
+    if target_chat_id is None:
+        target_chat_id = TELEGRAM_CHAT_ID  # Default ke DM pribadi
+        
+    if not TELEGRAM_BOT_TOKEN or not target_chat_id:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    payload = {"chat_id": target_chat_id, "text": message, "parse_mode": "HTML"}
     try:
         http_session.post(url, json=payload, timeout=10)
     except Exception:
@@ -487,17 +490,17 @@ def run_m91_scalper_scheduler():
             curr_month_key = wib_time.strftime("%Y-%m")
 
             if recap_state.get("daily") != curr_daily_key:
-                send_telegram_message(generate_recap(1, "REKAPAN HARIAN"))
+                send_telegram_message(generate_recap(1, "REKAPAN HARIAN"), target_chat_id=TELEGRAM_GROUP_ID)
                 recap_state["daily"] = curr_daily_key
                 save_recap_state(recap_state)
 
             if wib_time.weekday() == 0 and recap_state.get("weekly") != curr_week_key:
-                send_telegram_message(generate_recap(7, "REKAPAN MINGGUAN"))
+                send_telegram_message(generate_recap(7, "REKAPAN MINGGUAN"), target_chat_id=TELEGRAM_GROUP_ID)
                 recap_state["weekly"] = curr_week_key
                 save_recap_state(recap_state)
 
             if wib_time.day == 1 and recap_state.get("monthly") != curr_month_key:
-                send_telegram_message(generate_recap(30, "REKAPAN BULANAN"))
+                send_telegram_message(generate_recap(30, "REKAPAN BULANAN"), target_chat_id=TELEGRAM_GROUP_ID)
                 recap_state["monthly"] = curr_month_key
                 save_recap_state(recap_state)
 
@@ -542,21 +545,21 @@ def run_m91_scalper_scheduler():
                             st["pos_state"] = 0
                             st["entry_price"] = None
                             state_changed = True
-                            send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "SL", entry, curr_price)
                         elif tp3 is not None and curr_price >= tp3:
                             st["pos_state"] = 0
                             st["entry_price"] = None
                             state_changed = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP3", entry, curr_price)
                         elif tp2 is not None and curr_price >= tp2 and st.get("hit_tp2") is not True:
                             st["hit_tp2"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP2", entry, curr_price)
                         elif tp1 is not None and curr_price >= tp1 and st.get("hit_tp1") is not True:
                             st["hit_tp1"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP1", entry, curr_price)
 
                     elif pos_state == -1:
@@ -571,21 +574,21 @@ def run_m91_scalper_scheduler():
                             st["pos_state"] = 0
                             st["entry_price"] = None
                             state_changed = True
-                            send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "SL", entry, curr_price)
                         elif tp3 is not None and curr_price <= tp3:
                             st["pos_state"] = 0
                             st["entry_price"] = None
                             state_changed = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP3", entry, curr_price)
                         elif tp2 is not None and curr_price <= tp2 and st.get("hit_tp2") is not True:
                             st["hit_tp2"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP2", entry, curr_price)
                         elif tp1 is not None and curr_price <= tp1 and st.get("hit_tp1") is not True:
                             st["hit_tp1"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}")
+                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP1", entry, curr_price)
 
                     buy_signal = (st["pos_state"] == 0) and raw_buy
@@ -613,7 +616,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
                             f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
                         )
-                        send_telegram_message(msg_buy)
+                        send_telegram_message(msg_buy, target_chat_id=TELEGRAM_GROUP_ID)
 
                     elif sell_signal:
                         st["pos_state"] = -1
@@ -637,7 +640,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
                             f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
                         )
-                        send_telegram_message(msg_sell)
+                        send_telegram_message(msg_sell, target_chat_id=TELEGRAM_GROUP_ID)
 
                     if state_changed:
                         save_bot_state()
@@ -652,7 +655,7 @@ def run_m91_scalper_scheduler():
                 f"Waktu : {time_str}\n\n" +
                 "\n".join(flat_status_logs)
             )
-            send_telegram_message(log_msg)
+            send_telegram_message(log_msg)  # Ini tetap akan masuk ke DM pribadi
 
         except Exception as e:
             pass
