@@ -1,8 +1,8 @@
+
 import os
 import time
 import json
 import threading
-import gc
 import requests
 import numpy as np
 import pandas as pd
@@ -104,9 +104,6 @@ for disp_name in DISPLAY_TO_ASSET.keys():
         "d_res": 0.0,
         "zf_score": 0.0,
         "raw_drift": 0.0,
-        "raw_buy": False,
-        "raw_sell": False,
-        "std_p": 0.0,
         "pos_state": 0,
         "entry_price": None,
         "active_sl": None,
@@ -114,7 +111,8 @@ for disp_name in DISPLAY_TO_ASSET.keys():
         "active_tp2": None,
         "active_tp3": None,
         "hit_tp1": False,
-        "hit_tp2": False
+        "hit_tp2": False,
+        "candle_history": pd.DataFrame()
     }
 
 http_session = requests.Session()
@@ -413,22 +411,13 @@ def update_all_historical_data():
         if not df.empty:
             df_calc = calculate_zf_core(df.tail(200), params)
             last_row = df_calc.iloc[-1]
-            
             with state_lock:
+                asset_states[disp_name]["candle_history"] = df_calc
                 asset_states[disp_name]["live_price"] = float(last_row["close"])
                 asset_states[disp_name]["d_res"] = float(last_row["d_res"])
                 asset_states[disp_name]["zf_score"] = float(last_row["zf_score"])
                 asset_states[disp_name]["raw_drift"] = float(last_row["raw_drift"])
-                asset_states[disp_name]["raw_buy"] = bool(last_row["raw_buy"])
-                asset_states[disp_name]["raw_sell"] = bool(last_row["raw_sell"])
-                asset_states[disp_name]["std_p"] = float(last_row["std_p"]) if not np.isnan(last_row["std_p"]) else float(last_row["close"]) * 0.001
-            
-            del df
-            del df_calc
-            
-        time.sleep(0.3)
-    
-    gc.collect()
+        time.sleep(0.5)
 
 def start_websocket_binance():
     ws_url = "wss://stream.binance.com:9443/ws/btcusdt@trade"
@@ -544,14 +533,22 @@ def run_m91_scalper_scheduler():
                 
                 with state_lock:
                     st = asset_states[disp_name]
+                    df = st["candle_history"]
                     curr_price = st["live_price"]
-                    raw_buy = st["raw_buy"]
-                    raw_sell = st["raw_sell"]
-                    std_p = st["std_p"]
                     
-                if curr_price == 0.0:
+                if df.empty or len(df) < 5:
                     flat_status_logs.append(f"• <b>{disp_name}</b>: Data belum siap")
                     continue
+                
+                # --- PERBAIKAN POIN B ---
+                # Sinyal dikonfirmasi menggunakan candle yang sudah RESMI TUTUP (penultimate row / -2)
+                closed_row = df.iloc[-2]
+                raw_buy = bool(closed_row["raw_buy"])
+                raw_sell = bool(closed_row["raw_sell"])
+
+                # Metrik live (seperti std_p) menggunakan data candle berjalan terbaru
+                last_row = df.iloc[-1]
+                std_p = float(last_row["std_p"]) if not np.isnan(last_row["std_p"]) else curr_price * 0.001
 
                 with state_lock:
                     pos_state = st["pos_state"]
@@ -562,6 +559,7 @@ def run_m91_scalper_scheduler():
                     entry = st["entry_price"]
                     state_changed = False
 
+                    # Logika Exit / Trailing SL dipantau secara real-time terhadap live_price
                     if pos_state == 1:
                         if params["use_trailing"]:
                             trail_sl = curr_price - (std_p * params["sigma_sl_mult"])
@@ -620,6 +618,7 @@ def run_m91_scalper_scheduler():
                             send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP1", entry, curr_price)
 
+                    # Pembacaan Sinyal Baru (Hanya jika posisi sedang Netral / 0)
                     buy_signal = (st["pos_state"] == 0) and raw_buy
                     sell_signal = (st["pos_state"] == 0) and raw_sell
 
@@ -643,7 +642,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
                             f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                            f"⚡ <b>ZF-Score:</b> {closed_row['zf_score']:.2f} | <b>Drift:</b> {closed_row['d_res']:.2f}%"
                         )
                         send_telegram_message(msg_buy, target_chat_id=TELEGRAM_GROUP_ID)
 
@@ -667,7 +666,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
                             f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                            f"⚡ <b>ZF-Score:</b> {closed_row['zf_score']:.2f} | <b>Drift:</b> {closed_row['d_res']:.2f}%"
                         )
                         send_telegram_message(msg_sell, target_chat_id=TELEGRAM_GROUP_ID)
 
@@ -715,3 +714,4 @@ scheduler_thread.start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
