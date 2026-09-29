@@ -1,5 +1,7 @@
-flask
+yfinance
+ccxt
 requests
-numpy
 pandas
+flask
 websocket-client
+
