@@ -489,12 +489,11 @@ def start_websocket_twelvedata(group_name, api_key, assets):
 def run_m91_scalper_scheduler():
     time.sleep(5)
     recap_state = load_recap_state()
-    first_run = True # OPTIMASI: Flag untuk eksekusi langsung saat start
+    first_run = True
 
     while True:
         try:
             if not first_run:
-                # OPTIMASI: Hanya menunggu (sleep) panjang SETELAH putaran pertama sukses
                 now = datetime.now(timezone.utc)
                 seconds_to_next_5m = 300 - ((now.minute % 5) * 60 + now.second)
                 print(f"[BOT] Menunggu {seconds_to_next_5m} detik untuk sync 5 menit berikutnya...")
@@ -539,10 +538,15 @@ def run_m91_scalper_scheduler():
                 if df.empty or len(df) < 5:
                     flat_status_logs.append(f"• <b>{disp_name}</b>: Data belum siap")
                     continue
-                    
+                
+                # --- PERBAIKAN POIN B ---
+                # Sinyal dikonfirmasi menggunakan candle yang sudah RESMI TUTUP (penultimate row / -2)
+                closed_row = df.iloc[-2]
+                raw_buy = bool(closed_row["raw_buy"])
+                raw_sell = bool(closed_row["raw_sell"])
+
+                # Metrik live (seperti std_p) menggunakan data candle berjalan terbaru
                 last_row = df.iloc[-1]
-                raw_buy = bool(last_row["raw_buy"])
-                raw_sell = bool(last_row["raw_sell"])
                 std_p = float(last_row["std_p"]) if not np.isnan(last_row["std_p"]) else curr_price * 0.001
 
                 with state_lock:
@@ -554,6 +558,7 @@ def run_m91_scalper_scheduler():
                     entry = st["entry_price"]
                     state_changed = False
 
+                    # Logika Exit / Trailing SL dipantau secara real-time terhadap live_price
                     if pos_state == 1:
                         if params["use_trailing"]:
                             trail_sl = curr_price - (std_p * params["sigma_sl_mult"])
@@ -612,6 +617,7 @@ def run_m91_scalper_scheduler():
                             send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP1", entry, curr_price)
 
+                    # Pembacaan Sinyal Baru (Hanya jika posisi sedang Netral / 0)
                     buy_signal = (st["pos_state"] == 0) and raw_buy
                     sell_signal = (st["pos_state"] == 0) and raw_sell
 
@@ -635,7 +641,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
                             f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                            f"⚡ <b>ZF-Score:</b> {closed_row['zf_score']:.2f} | <b>Drift:</b> {closed_row['d_res']:.2f}%"
                         )
                         send_telegram_message(msg_buy, target_chat_id=TELEGRAM_GROUP_ID)
 
@@ -659,7 +665,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
                             f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
+                            f"⚡ <b>ZF-Score:</b> {closed_row['zf_score']:.2f} | <b>Drift:</b> {closed_row['d_res']:.2f}%"
                         )
                         send_telegram_message(msg_sell, target_chat_id=TELEGRAM_GROUP_ID)
 
