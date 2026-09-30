@@ -105,7 +105,7 @@ ASSET_CONFIG = {
     "Crypto": {
         "source": "binance",
         "assets": [
-            {"api_symbol": "BTCUSDT", "display_name": "BTC/USD", "params": PARAMS_BTC}
+            {"api_symbol": "BTC/USDT", "display_name": "BTC/USD", "params": PARAMS_BTC}
         ],
         "interval": "5m"
     }
