@@ -1,4 +1,3 @@
-
 import os
 import time
 import json
@@ -15,9 +14,51 @@ STATE_FILE = "bot_state.json"
 STATS_FILE = "trade_history.json"
 RECAP_FILE = "recap_state.json"
 
-GLOBAL_PARAMS = {
-    "length_period": 20,
-    "batas_zf": 0.55,
+PARAMS_FOREX = {
+    "length_period": 50,
+    "batas_zf": 0.12,
+    "min_drift": 0.10,
+    "use_ema_filter": True,
+    "kepekaan_fractal": 8,
+    "min_fvg_mult": 0.5,
+    "sigma_sl_mult": 4.5,
+    "rr1_ratio": 0.5,
+    "rr2_ratio": 1.0,
+    "rr3_ratio": 1.5,
+    "use_trailing": True
+}
+
+PARAMS_BTC = {
+    "length_period": 21,
+    "batas_zf": 0.65,
+    "min_drift": 0.17,
+    "use_ema_filter": True,
+    "kepekaan_fractal": 8,
+    "min_fvg_mult": 0.5,
+    "sigma_sl_mult": 4.5,
+    "rr1_ratio": 0.5,
+    "rr2_ratio": 1.0,
+    "rr3_ratio": 1.5,
+    "use_trailing": True
+}
+
+PARAMS_XAU_XAG = {
+    "length_period": 21,
+    "batas_zf": 0.51,
+    "min_drift": 0.17,
+    "use_ema_filter": True,
+    "kepekaan_fractal": 8,
+    "min_fvg_mult": 0.5,
+    "sigma_sl_mult": 4.5,
+    "rr1_ratio": 0.5,
+    "rr2_ratio": 1.0,
+    "rr3_ratio": 1.5,
+    "use_trailing": True
+}
+
+PARAMS_OIL = {
+    "length_period": 50,
+    "batas_zf": 0.26,
     "min_drift": 0.15,
     "use_ema_filter": True,
     "kepekaan_fractal": 8,
@@ -34,43 +75,39 @@ ASSET_CONFIG = {
         "source": "twelvedata",
         "api_key": os.environ.get("TWELVEDATA_API_KEY_FOREX", ""),
         "assets": [
-            {"api_symbol": "EUR/USD", "display_name": "EUR/USD"},
-            {"api_symbol": "GBP/USD", "display_name": "GBP/USD"},
-            {"api_symbol": "USD/JPY", "display_name": "USD/JPY"},
-            {"api_symbol": "USD/CHF", "display_name": "USD/CHF"},
-            {"api_symbol": "USD/CAD", "display_name": "USD/CAD"},
-            {"api_symbol": "AUD/USD", "display_name": "AUD/USD"},
-            {"api_symbol": "NZD/USD", "display_name": "NZD/USD"},
+            {"api_symbol": "EUR/USD", "display_name": "EUR/USD", "params": PARAMS_FOREX},
+            {"api_symbol": "GBP/USD", "display_name": "GBP/USD", "params": PARAMS_FOREX},
+            {"api_symbol": "USD/JPY", "display_name": "USD/JPY", "params": PARAMS_FOREX},
+            {"api_symbol": "USD/CHF", "display_name": "USD/CHF", "params": PARAMS_FOREX},
+            {"api_symbol": "USD/CAD", "display_name": "USD/CAD", "params": PARAMS_FOREX},
+            {"api_symbol": "AUD/USD", "display_name": "AUD/USD", "params": PARAMS_FOREX},
+            {"api_symbol": "NZD/USD", "display_name": "NZD/USD", "params": PARAMS_FOREX},
         ],
-        "interval": "30min",
-        "params": GLOBAL_PARAMS
+        "interval": "5min"
     },
     "Gold TwelveData": {
         "source": "twelvedata",
         "api_key": os.environ.get("TWELVEDATA_API_KEY_GOLD", ""),
         "assets": [
-            {"api_symbol": "XAU/USD", "display_name": "XAU/USD"}
+            {"api_symbol": "XAU/USD", "display_name": "XAU/USD", "params": PARAMS_XAU_XAG}
         ],
-        "interval": "5min",
-        "params": GLOBAL_PARAMS
+        "interval": "5min"
     },
     "YFinance Commodities": {
         "source": "yfinance",
         "assets": [
-            {"api_symbol": "SI=F", "display_name": "XAG/USD"},
-            {"api_symbol": "CL=F", "display_name": "USOIL"},
-            {"api_symbol": "BZ=F", "display_name": "UKOIL"}
+            {"api_symbol": "SI=F", "display_name": "XAG/USD", "params": PARAMS_XAU_XAG},
+            {"api_symbol": "CL=F", "display_name": "USOIL", "params": PARAMS_OIL},
+            {"api_symbol": "BZ=F", "display_name": "UKOIL", "params": PARAMS_OIL}
         ],
-        "interval": "30m",
-        "params": GLOBAL_PARAMS
+        "interval": "5m"
     },
     "Crypto": {
         "source": "binance",
         "assets": [
-            {"api_symbol": "BTCUSDT", "display_name": "BTC/USD"}
+            {"api_symbol": "BTCUSDT", "display_name": "BTC/USD", "params": PARAMS_BTC}
         ],
-        "interval": "5m",
-        "params": GLOBAL_PARAMS
+        "interval": "5m"
     }
 }
 
@@ -92,7 +129,7 @@ for group_name, group_cfg in ASSET_CONFIG.items():
             "source": group_cfg["source"],
             "api_key": group_cfg.get("api_key", ""),
             "interval": group_cfg["interval"],
-            "params": group_cfg["params"]
+            "params": item["params"]
         }
 
 state_lock = threading.Lock()
@@ -134,8 +171,8 @@ def save_bot_state():
                 }
         with open(STATE_FILE, "w") as f:
             json.dump(data_to_save, f, indent=2)
-    except Exception as e:
-        print(f"Error saving state: {e}")
+    except Exception:
+        pass
 
 def load_bot_state():
     if os.path.exists(STATE_FILE):
@@ -146,24 +183,24 @@ def load_bot_state():
                 for sym, st in saved_data.items():
                     if sym in asset_states:
                         asset_states[sym].update(st)
-        except Exception as e:
-            print(f"Error loading state: {e}")
+        except Exception:
+            pass
 
 def load_recap_state():
     if os.path.exists(RECAP_FILE):
         try:
             with open(RECAP_FILE, "r") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"Error loading recap state: {e}")
+        except Exception:
+            pass
     return {"daily": "", "weekly": "", "monthly": ""}
 
 def save_recap_state(state):
     try:
         with open(RECAP_FILE, "w") as f:
             json.dump(state, f, indent=2)
-    except Exception as e:
-        print(f"Error saving recap state: {e}")
+    except Exception:
+        pass
 
 def log_trade_result(symbol, result_type, entry_p, exit_p):
     try:
@@ -181,8 +218,8 @@ def log_trade_result(symbol, result_type, entry_p, exit_p):
         })
         with open(STATS_FILE, "w") as f:
             json.dump(history, f, indent=2)
-    except Exception as e:
-        print(f"Error logging trade result: {e}")
+    except Exception:
+        pass
 
 def generate_recap(days, title):
     if not os.path.exists(STATS_FILE):
@@ -241,17 +278,13 @@ def send_telegram_message(message, target_chat_id=None):
         target_chat_id = TELEGRAM_CHAT_ID
         
     if not TELEGRAM_BOT_TOKEN or not target_chat_id:
-        print(f"Telegram Config Missing. Message: {message[:50]}...")
         return
-        
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": target_chat_id, "text": message, "parse_mode": "HTML"}
     try:
-        resp = http_session.post(url, json=payload, timeout=10)
-        if resp.status_code != 200:
-            print(f"Failed to send Telegram msg: {resp.text}")
-    except Exception as e:
-        print(f"Telegram Exception: {e}")
+        http_session.post(url, json=payload, timeout=10)
+    except Exception:
+        pass
 
 def calculate_zf_core(df, params):
     if df.empty or len(df) < 150:
@@ -300,7 +333,7 @@ def calculate_zf_core(df, params):
     tr2 = (df['high'] - df['close'].shift(1)).abs()
     tr3 = (df['low'] - df['close'].shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    df['atr'] = tr.rolling(window=14).mean()
+    df['atr'] = tr.ewm(alpha=1/14, adjust=False).mean()
 
     min_fvg_dist = df['atr'] * p['min_fvg_mult']
     bull_fvg = df['low'] - df['high'].shift(2)
@@ -341,7 +374,7 @@ def calculate_zf_core(df, params):
 
     return df
 
-def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
+def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="5min"):
     try:
         if source == "binance":
             url = f"https://api.binance.com/api/v3/klines?symbol={api_symbol}&interval={interval}&limit=200"
@@ -392,14 +425,11 @@ def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="30min"):
                 df['close'] = df['close'].astype(float)
                 df['volume'] = df['volume'].astype(float) if 'volume' in df.columns else 0.0
                 return df
-            else:
-                print(f"Twelvedata Error for {api_symbol}: {res}")
-    except Exception as e:
-        print(f"Error fetching candles for {api_symbol}: {e}")
+    except Exception:
+        pass
     return pd.DataFrame()
 
 def update_all_historical_data():
-    print("[BOT] Memperbarui data historis untuk semua aset...")
     for disp_name, info in DISPLAY_TO_ASSET.items():
         api_sym = info["api_symbol"]
         source = info["source"]
@@ -410,13 +440,14 @@ def update_all_historical_data():
         df = fetch_candles_for_symbol(api_sym, source, key, interval)
         if not df.empty:
             df_calc = calculate_zf_core(df.tail(200), params)
-            last_row = df_calc.iloc[-1]
+            closed_bar = df_calc.iloc[-2] if len(df_calc) >= 2 else df_calc.iloc[-1]
             with state_lock:
                 asset_states[disp_name]["candle_history"] = df_calc
-                asset_states[disp_name]["live_price"] = float(last_row["close"])
-                asset_states[disp_name]["d_res"] = float(last_row["d_res"])
-                asset_states[disp_name]["zf_score"] = float(last_row["zf_score"])
-                asset_states[disp_name]["raw_drift"] = float(last_row["raw_drift"])
+                if asset_states[disp_name]["live_price"] == 0.0:
+                    asset_states[disp_name]["live_price"] = float(df_calc.iloc[-1]["close"])
+                asset_states[disp_name]["d_res"] = float(closed_bar["d_res"])
+                asset_states[disp_name]["zf_score"] = float(closed_bar["zf_score"])
+                asset_states[disp_name]["raw_drift"] = float(closed_bar["raw_drift"])
         time.sleep(0.5)
 
 def start_websocket_binance():
@@ -433,30 +464,24 @@ def start_websocket_binance():
             pass
 
     def on_error(ws, error):
-        print(f"WS Binance Error: {error}")
+        pass
 
     def on_close(ws, status, msg):
-        print("WS Binance Closed")
+        pass
 
     while True:
         try:
-            print("[BOT] Menghubungkan ke Websocket Binance...")
             ws = websocket.WebSocketApp(ws_url, on_message=on_message, on_error=on_error, on_close=on_close)
             ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            print(f"WS Binance Exception: {e}")
+        except Exception:
+            pass
         time.sleep(5)
 
 def start_websocket_twelvedata(group_name, api_key, assets):
-    if not api_key:
-        print(f"[BOT] API Key kosong untuk grup {group_name}. WS dibatalkan.")
-        return
-        
     api_symbols = [item["api_symbol"] for item in assets]
     ws_url = f"wss://ws.twelvedata.com/v1/quotes/price?apikey={api_key}"
 
     def on_open(ws):
-        print(f"[BOT] WS Twelvedata Terhubung untuk {group_name}")
         ws.send(json.dumps({"action": "subscribe", "params": {"symbols": ",".join(api_symbols)}}))
 
     def on_message(ws, message):
@@ -473,38 +498,31 @@ def start_websocket_twelvedata(group_name, api_key, assets):
             pass
 
     def on_error(ws, error):
-        print(f"WS Twelvedata Error ({group_name}): {error}")
+        pass
 
     def on_close(ws, status, msg):
-        print(f"WS Twelvedata Closed ({group_name})")
+        pass
 
     while True:
         try:
-            print(f"[BOT] Menghubungkan ke WS Twelvedata ({group_name})...")
             ws = websocket.WebSocketApp(ws_url, on_open=on_open, on_message=on_message, on_error=on_error, on_close=on_close)
             ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            print(f"WS Twelvedata Exception ({group_name}): {e}")
+        except Exception:
+            pass
         time.sleep(5)
 
 def run_m91_scalper_scheduler():
     time.sleep(5)
     recap_state = load_recap_state()
-    first_run = True
 
     while True:
         try:
-            if not first_run:
-                now = datetime.now(timezone.utc)
-                seconds_to_next_5m = 300 - ((now.minute % 5) * 60 + now.second)
-                print(f"[BOT] Menunggu {seconds_to_next_5m} detik untuk sync 5 menit berikutnya...")
-                time.sleep(seconds_to_next_5m)
-            
-            first_run = False
-            
+            now = datetime.now()
+            seconds_to_next_5m = 300 - ((now.minute % 5) * 60 + now.second)
+            time.sleep(seconds_to_next_5m)
+
             wib_time = datetime.now(timezone.utc) + timedelta(hours=7)
             time_str = wib_time.strftime("%Y-%m-%d %H:%M:00 WIB")
-            print(f"\n--- Memulai putaran pengecekan pukul {time_str} ---")
 
             curr_daily_key = wib_time.strftime("%Y-%m-%d")
             curr_week_key = wib_time.strftime("%Y-W%U")
@@ -539,16 +557,11 @@ def run_m91_scalper_scheduler():
                 if df.empty or len(df) < 5:
                     flat_status_logs.append(f"• <b>{disp_name}</b>: Data belum siap")
                     continue
-                
-                # --- PERBAIKAN POIN B ---
-                # Sinyal dikonfirmasi menggunakan candle yang sudah RESMI TUTUP (penultimate row / -2)
-                closed_row = df.iloc[-2]
+                    
+                closed_row = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
                 raw_buy = bool(closed_row["raw_buy"])
                 raw_sell = bool(closed_row["raw_sell"])
-
-                # Metrik live (seperti std_p) menggunakan data candle berjalan terbaru
-                last_row = df.iloc[-1]
-                std_p = float(last_row["std_p"]) if not np.isnan(last_row["std_p"]) else curr_price * 0.001
+                std_p = float(closed_row["std_p"]) if not np.isnan(closed_row["std_p"]) else curr_price * 0.001
 
                 with state_lock:
                     pos_state = st["pos_state"]
@@ -559,7 +572,10 @@ def run_m91_scalper_scheduler():
                     entry = st["entry_price"]
                     state_changed = False
 
-                    # Logika Exit / Trailing SL dipantau secara real-time terhadap live_price
+                    st["d_res"] = float(closed_row["d_res"])
+                    st["zf_score"] = float(closed_row["zf_score"])
+                    st["raw_drift"] = float(closed_row["raw_drift"])
+
                     if pos_state == 1:
                         if params["use_trailing"]:
                             trail_sl = curr_price - (std_p * params["sigma_sl_mult"])
@@ -618,7 +634,6 @@ def run_m91_scalper_scheduler():
                             send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP1", entry, curr_price)
 
-                    # Pembacaan Sinyal Baru (Hanya jika posisi sedang Netral / 0)
                     buy_signal = (st["pos_state"] == 0) and raw_buy
                     sell_signal = (st["pos_state"] == 0) and raw_sell
 
@@ -642,7 +657,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
                             f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {closed_row['zf_score']:.2f} | <b>Drift:</b> {closed_row['d_res']:.2f}%"
+                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
                         )
                         send_telegram_message(msg_buy, target_chat_id=TELEGRAM_GROUP_ID)
 
@@ -666,7 +681,7 @@ def run_m91_scalper_scheduler():
                             f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
                             f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
                             f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
-                            f"⚡ <b>ZF-Score:</b> {closed_row['zf_score']:.2f} | <b>Drift:</b> {closed_row['d_res']:.2f}%"
+                            f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
                         )
                         send_telegram_message(msg_sell, target_chat_id=TELEGRAM_GROUP_ID)
 
@@ -683,11 +698,10 @@ def run_m91_scalper_scheduler():
                 f"Waktu : {time_str}\n\n" +
                 "\n".join(flat_status_logs)
             )
-            print("[BOT] Sukses mengkalkulasi harga, mengirimkan log Telegram...")
-            send_telegram_message(log_msg) 
+            send_telegram_message(log_msg)
 
         except Exception as e:
-            print(f"Error di loop scheduler utama: {e}")
+            pass
 
 load_bot_state()
 update_all_historical_data()
@@ -714,4 +728,3 @@ scheduler_thread.start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
