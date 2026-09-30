@@ -103,12 +103,14 @@ ASSET_CONFIG = {
         "interval": "5m"
     },
     "Crypto": {
-        "source": "binance",
+        "source": "twelvedata",
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_GOLD", ""),
         "assets": [
-            {"api_symbol": "BTC/USDT", "display_name": "BTC/USD", "params": PARAMS_BTC}
+            {"api_symbol": "BTC/USD", "display_name": "BTC/USD", "params": PARAMS_BTC}
         ],
-        "interval": "5m"
+        "interval": "5min"
     }
+
 }
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
