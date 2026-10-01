@@ -56,10 +56,24 @@ PARAMS_XAU_XAG = {
     "use_trailing": True
 }
 
-PARAMS_OIL = {
+PARAMS_UKOIL = {
     "length_period": 50,
     "batas_zf": 0.26,
     "min_drift": 0.15,
+    "use_ema_filter": True,
+    "kepekaan_fractal": 8,
+    "min_fvg_mult": 0.5,
+    "sigma_sl_mult": 4.5,
+    "rr1_ratio": 0.5,
+    "rr2_ratio": 1.0,
+    "rr3_ratio": 1.5,
+    "use_trailing": True
+}
+
+PARAMS_USOIL = {
+    "length_period": 21,
+    "batas_zf": 0.51,
+    "min_drift": 0.27,
     "use_ema_filter": True,
     "kepekaan_fractal": 8,
     "min_fvg_mult": 0.5,
@@ -97,20 +111,18 @@ ASSET_CONFIG = {
         "source": "yfinance",
         "assets": [
             {"api_symbol": "SI=F", "display_name": "XAG/USD", "params": PARAMS_XAU_XAG},
-            {"api_symbol": "CL=F", "display_name": "USOIL", "params": PARAMS_OIL},
-            {"api_symbol": "BZ=F", "display_name": "UKOIL", "params": PARAMS_OIL}
+            {"api_symbol": "CL=F", "display_name": "USOIL", "params": PARAMS_USOIL},
+            {"api_symbol": "BZ=F", "display_name": "UKOIL", "params": PARAMS_UKOIL}
         ],
         "interval": "5m"
     },
     "Crypto": {
-        "source": "twelvedata",
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_GOLD", ""),
+        "source": "binance",
         "assets": [
-            {"api_symbol": "BTC/USD", "display_name": "BTC/USD", "params": PARAMS_BTC}
+            {"api_symbol": "BTCUSDT", "display_name": "BTC/USD", "params": PARAMS_BTC}
         ],
-        "interval": "5min"
+        "interval": "5m"
     }
-
 }
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -151,6 +163,7 @@ for disp_name in DISPLAY_TO_ASSET.keys():
         "active_tp3": None,
         "hit_tp1": False,
         "hit_tp2": False,
+        "last_signal_time": None,
         "candle_history": pd.DataFrame()
     }
 
@@ -170,6 +183,7 @@ def save_bot_state():
                     "active_tp3": st["active_tp3"],
                     "hit_tp1": st.get("hit_tp1", False),
                     "hit_tp2": st.get("hit_tp2", False),
+                    "last_signal_time": st.get("last_signal_time", None)
                 }
         with open(STATE_FILE, "w") as f:
             json.dump(data_to_save, f, indent=2)
@@ -561,6 +575,7 @@ def run_m91_scalper_scheduler():
                     continue
                     
                 closed_row = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
+                closed_row_time = str(closed_row.get("datetime", ""))
                 raw_buy = bool(closed_row["raw_buy"])
                 raw_sell = bool(closed_row["raw_sell"])
                 std_p = float(closed_row["std_p"]) if not np.isnan(closed_row["std_p"]) else curr_price * 0.001
@@ -589,23 +604,45 @@ def run_m91_scalper_scheduler():
                         if sl is not None and curr_price <= sl:
                             st["pos_state"] = 0
                             st["entry_price"] = None
+                            st["active_sl"] = None
+                            st["active_tp1"] = None
+                            st["active_tp2"] = None
+                            st["active_tp3"] = None
+                            st["hit_tp1"] = False
+                            st["hit_tp2"] = False
                             state_changed = True
                             send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "SL", entry, curr_price)
+
                         elif tp3 is not None and curr_price >= tp3:
                             st["pos_state"] = 0
                             st["entry_price"] = None
+                            st["active_sl"] = None
+                            st["active_tp1"] = None
+                            st["active_tp2"] = None
+                            st["active_tp3"] = None
+                            st["hit_tp1"] = False
+                            st["hit_tp2"] = False
                             state_changed = True
                             send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP3", entry, curr_price)
-                        elif tp2 is not None and curr_price >= tp2 and st.get("hit_tp2") is not True:
-                            st["hit_tp2"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
-                            log_trade_result(disp_name, "TP2", entry, curr_price)
-                        elif tp1 is not None and curr_price >= tp1 and st.get("hit_tp1") is not True:
-                            st["hit_tp1"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
-                            log_trade_result(disp_name, "TP1", entry, curr_price)
+
+                        else:
+                            if tp2 is not None and curr_price >= tp2 and not st.get("hit_tp2", False):
+                                st["hit_tp2"] = True
+                                if tp1 is not None:
+                                    st["active_sl"] = max(st["active_sl"] if st["active_sl"] is not None else tp1, tp1)
+                                state_changed = True
+                                send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2 (SL -> TP1)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                                log_trade_result(disp_name, "TP2", entry, curr_price)
+
+                            elif tp1 is not None and curr_price >= tp1 and not st.get("hit_tp1", False):
+                                st["hit_tp1"] = True
+                                if entry is not None:
+                                    st["active_sl"] = max(st["active_sl"] if st["active_sl"] is not None else entry, entry)
+                                state_changed = True
+                                send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                                log_trade_result(disp_name, "TP1", entry, curr_price)
 
                     elif pos_state == -1:
                         if params["use_trailing"]:
@@ -618,32 +655,55 @@ def run_m91_scalper_scheduler():
                         if sl is not None and curr_price >= sl:
                             st["pos_state"] = 0
                             st["entry_price"] = None
+                            st["active_sl"] = None
+                            st["active_tp1"] = None
+                            st["active_tp2"] = None
+                            st["active_tp3"] = None
+                            st["hit_tp1"] = False
+                            st["hit_tp2"] = False
                             state_changed = True
                             send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "SL", entry, curr_price)
+
                         elif tp3 is not None and curr_price <= tp3:
                             st["pos_state"] = 0
                             st["entry_price"] = None
+                            st["active_sl"] = None
+                            st["active_tp1"] = None
+                            st["active_tp2"] = None
+                            st["active_tp3"] = None
+                            st["hit_tp1"] = False
+                            st["hit_tp2"] = False
                             state_changed = True
                             send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                             log_trade_result(disp_name, "TP3", entry, curr_price)
-                        elif tp2 is not None and curr_price <= tp2 and st.get("hit_tp2") is not True:
-                            st["hit_tp2"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
-                            log_trade_result(disp_name, "TP2", entry, curr_price)
-                        elif tp1 is not None and curr_price <= tp1 and st.get("hit_tp1") is not True:
-                            st["hit_tp1"] = True
-                            send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
-                            log_trade_result(disp_name, "TP1", entry, curr_price)
 
-                    buy_signal = (st["pos_state"] == 0) and raw_buy
-                    sell_signal = (st["pos_state"] == 0) and raw_sell
+                        else:
+                            if tp2 is not None and curr_price <= tp2 and not st.get("hit_tp2", False):
+                                st["hit_tp2"] = True
+                                if tp1 is not None:
+                                    st["active_sl"] = min(st["active_sl"] if st["active_sl"] is not None else tp1, tp1)
+                                state_changed = True
+                                send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2 (SL -> TP1)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                                log_trade_result(disp_name, "TP2", entry, curr_price)
+
+                            elif tp1 is not None and curr_price <= tp1 and not st.get("hit_tp1", False):
+                                st["hit_tp1"] = True
+                                if entry is not None:
+                                    st["active_sl"] = min(st["active_sl"] if st["active_sl"] is not None else entry, entry)
+                                state_changed = True
+                                send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(disp_name, curr_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                                log_trade_result(disp_name, "TP1", entry, curr_price)
+
+                    buy_signal = (st["pos_state"] == 0) and raw_buy and (st.get("last_signal_time") != closed_row_time)
+                    sell_signal = (st["pos_state"] == 0) and raw_sell and (st.get("last_signal_time") != closed_row_time)
 
                     if buy_signal:
                         st["pos_state"] = 1
                         st["entry_price"] = curr_price
                         st["hit_tp1"] = False
                         st["hit_tp2"] = False
+                        st["last_signal_time"] = closed_row_time
                         risk = std_p * params["sigma_sl_mult"]
                         st["active_sl"] = curr_price - risk
                         st["active_tp1"] = curr_price + (risk * params["rr1_ratio"])
@@ -668,6 +728,7 @@ def run_m91_scalper_scheduler():
                         st["entry_price"] = curr_price
                         st["hit_tp1"] = False
                         st["hit_tp2"] = False
+                        st["last_signal_time"] = closed_row_time
                         risk = std_p * params["sigma_sl_mult"]
                         st["active_sl"] = curr_price + risk
                         st["active_tp1"] = curr_price - (risk * params["rr1_ratio"])
@@ -702,7 +763,7 @@ def run_m91_scalper_scheduler():
             )
             send_telegram_message(log_msg)
 
-        except Exception as e:
+        except Exception:
             pass
 
 load_bot_state()
