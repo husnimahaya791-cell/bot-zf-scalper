@@ -117,12 +117,11 @@ ASSET_CONFIG = {
         "interval": "5m"
     },
     "Crypto": {
-        "source": "twelvedata",
-        "api_key": os.environ.get("TWELVEDATA_API_KEY_BTC", ""),
+        "source": "yfinance",
         "assets": [
-            {"api_symbol": "BTC/USD", "display_name": "BTC/USD", "params": PARAMS_BTC}
+            {"api_symbol": "BTC-USD", "display_name": "BTC/USD", "params": PARAMS_BTC}
         ],
-        "interval": "5min"
+        "interval": "5m"
     }
 }
 
@@ -394,7 +393,23 @@ def calculate_zf_core(df, params):
 
 def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="5min"):
     try:
-        if source == "yfinance":
+        if source == "binance":
+            url = f"https://api.binance.com/api/v3/klines?symbol={api_symbol}&interval={interval}&limit=200"
+            res = http_session.get(url, timeout=10).json()
+            if isinstance(res, list) and len(res) > 0:
+                data = []
+                for k in res:
+                    data.append({
+                        "datetime": pd.to_datetime(k[0], unit='ms'),
+                        "open": float(k[1]),
+                        "high": float(k[2]),
+                        "low": float(k[3]),
+                        "close": float(k[4]),
+                        "volume": float(k[5])
+                    })
+                return pd.DataFrame(data)
+                
+        elif source == "yfinance":
             yf_interval = interval.replace("min", "m")
             ticker = yf.Ticker(api_symbol)
             df_yf = ticker.history(period="7d", interval=yf_interval)
@@ -450,11 +465,9 @@ def update_all_historical_data():
                 asset_states[disp_name]["d_res"] = float(closed_bar["d_res"])
                 asset_states[disp_name]["zf_score"] = float(closed_bar["zf_score"])
                 asset_states[disp_name]["raw_drift"] = float(closed_bar["raw_drift"])
-        time.sleep(0.3)
+        time.sleep(0.5)
 
 def start_websocket_twelvedata(group_name, api_key, assets):
-    if not api_key:
-        return
     api_symbols = [item["api_symbol"] for item in assets]
     ws_url = f"wss://ws.twelvedata.com/v1/quotes/price?apikey={api_key}"
 
@@ -735,7 +748,7 @@ for group_name, group_cfg in ASSET_CONFIG.items():
     if source == "twelvedata":
         ws_thread = threading.Thread(
             target=start_websocket_twelvedata,
-            args=(group_name, group_cfg.get("api_key", ""), group_cfg["assets"]),
+            args=(group_name, group_cfg["api_key"], group_cfg["assets"]),
             daemon=True
         )
         ws_thread.start()
