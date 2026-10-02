@@ -10,7 +10,7 @@ import yfinance as yf
 from flask import Flask
 from datetime import datetime, timezone, timedelta
 
-STATE_FILE = "bot_state.json"
+STATE_FILE = "active_positions.json"
 STATS_FILE = "trade_history.json"
 RECAP_FILE = "recap_state.json"
 
@@ -117,11 +117,12 @@ ASSET_CONFIG = {
         "interval": "5m"
     },
     "Crypto": {
-        "source": "binance",
+        "source": "twelvedata",
+        "api_key": os.environ.get("TWELVEDATA_API_KEY_BTC", ""),
         "assets": [
-            {"api_symbol": "BTCUSDT", "display_name": "BTC/USD", "params": PARAMS_BTC}
+            {"api_symbol": "BTC/USD", "display_name": "BTC/USD", "params": PARAMS_BTC}
         ],
-        "interval": "5m"
+        "interval": "5min"
     }
 }
 
@@ -169,28 +170,29 @@ for disp_name in DISPLAY_TO_ASSET.keys():
 
 http_session = requests.Session()
 
-def save_bot_state():
+def save_open_positions():
     try:
         data_to_save = {}
         with state_lock:
             for sym, st in asset_states.items():
-                data_to_save[sym] = {
-                    "pos_state": st["pos_state"],
-                    "entry_price": st["entry_price"],
-                    "active_sl": st["active_sl"],
-                    "active_tp1": st["active_tp1"],
-                    "active_tp2": st["active_tp2"],
-                    "active_tp3": st["active_tp3"],
-                    "hit_tp1": st.get("hit_tp1", False),
-                    "hit_tp2": st.get("hit_tp2", False),
-                    "last_signal_time": st.get("last_signal_time", None)
-                }
+                if st["pos_state"] != 0:
+                    data_to_save[sym] = {
+                        "pos_state": st["pos_state"],
+                        "entry_price": st["entry_price"],
+                        "active_sl": st["active_sl"],
+                        "active_tp1": st["active_tp1"],
+                        "active_tp2": st["active_tp2"],
+                        "active_tp3": st["active_tp3"],
+                        "hit_tp1": st.get("hit_tp1", False),
+                        "hit_tp2": st.get("hit_tp2", False),
+                        "last_signal_time": st.get("last_signal_time", None)
+                    }
         with open(STATE_FILE, "w") as f:
             json.dump(data_to_save, f, indent=2)
     except Exception:
         pass
 
-def load_bot_state():
+def load_open_positions():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
@@ -392,23 +394,7 @@ def calculate_zf_core(df, params):
 
 def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="5min"):
     try:
-        if source == "binance":
-            url = f"https://api.binance.com/api/v3/klines?symbol={api_symbol}&interval={interval}&limit=200"
-            res = http_session.get(url, timeout=10).json()
-            if isinstance(res, list) and len(res) > 0:
-                data = []
-                for k in res:
-                    data.append({
-                        "datetime": pd.to_datetime(k[0], unit='ms'),
-                        "open": float(k[1]),
-                        "high": float(k[2]),
-                        "low": float(k[3]),
-                        "close": float(k[4]),
-                        "volume": float(k[5])
-                    })
-                return pd.DataFrame(data)
-                
-        elif source == "yfinance":
+        if source == "yfinance":
             yf_interval = interval.replace("min", "m")
             ticker = yf.Ticker(api_symbol)
             df_yf = ticker.history(period="7d", interval=yf_interval)
@@ -464,36 +450,11 @@ def update_all_historical_data():
                 asset_states[disp_name]["d_res"] = float(closed_bar["d_res"])
                 asset_states[disp_name]["zf_score"] = float(closed_bar["zf_score"])
                 asset_states[disp_name]["raw_drift"] = float(closed_bar["raw_drift"])
-        time.sleep(0.5)
-
-def start_websocket_binance():
-    ws_url = "wss://stream.binance.com:9443/ws/btcusdt@trade"
-
-    def on_message(ws, message):
-        try:
-            data = json.loads(message)
-            price = float(data.get("p", 0))
-            if price > 0 and "BTC/USD" in asset_states:
-                with state_lock:
-                    asset_states["BTC/USD"]["live_price"] = price
-        except Exception:
-            pass
-
-    def on_error(ws, error):
-        pass
-
-    def on_close(ws, status, msg):
-        pass
-
-    while True:
-        try:
-            ws = websocket.WebSocketApp(ws_url, on_message=on_message, on_error=on_error, on_close=on_close)
-            ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception:
-            pass
-        time.sleep(5)
+        time.sleep(0.3)
 
 def start_websocket_twelvedata(group_name, api_key, assets):
+    if not api_key:
+        return
     api_symbols = [item["api_symbol"] for item in assets]
     ws_url = f"wss://ws.twelvedata.com/v1/quotes/price?apikey={api_key}"
 
@@ -749,7 +710,7 @@ def run_m91_scalper_scheduler():
                         send_telegram_message(msg_sell, target_chat_id=TELEGRAM_GROUP_ID)
 
                     if state_changed:
-                        save_bot_state()
+                        save_open_positions()
 
                     state_txt = "BUY" if st["pos_state"] == 1 else "SELL" if st["pos_state"] == -1 else "NEUTRAL"
                     flat_status_logs.append(
@@ -766,21 +727,15 @@ def run_m91_scalper_scheduler():
         except Exception:
             pass
 
-load_bot_state()
+load_open_positions()
 update_all_historical_data()
 
 for group_name, group_cfg in ASSET_CONFIG.items():
     source = group_cfg["source"]
-    if source == "binance":
-        ws_thread = threading.Thread(
-            target=start_websocket_binance,
-            daemon=True
-        )
-        ws_thread.start()
-    elif source == "twelvedata":
+    if source == "twelvedata":
         ws_thread = threading.Thread(
             target=start_websocket_twelvedata,
-            args=(group_name, group_cfg["api_key"], group_cfg["assets"]),
+            args=(group_name, group_cfg.get("api_key", ""), group_cfg["assets"]),
             daemon=True
         )
         ws_thread.start()
