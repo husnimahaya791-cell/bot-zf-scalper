@@ -4,4 +4,4 @@ requests
 pandas
 flask
 websocket-client
-
+gunicorn
