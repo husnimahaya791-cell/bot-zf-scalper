@@ -1,7 +1,8 @@
-yfinance
+pandas
+numpy
 ccxt
 requests
-pandas
-flask
 websocket-client
+yfinance
+Flask
 gunicorn
