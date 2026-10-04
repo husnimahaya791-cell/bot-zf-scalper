@@ -15,27 +15,22 @@ import yfinance as yf
 from flask import Flask
 from datetime import datetime, timezone, timedelta
 
-# Konfigurasi Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler()]
 )
 
-# File Penyimpanan SQLite
 DB_FILE = os.environ.get("DB_PATH", "bot_database.db")
 
-# Credentials Bitget
 BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
 BITGET_SECRET_KEY = os.environ.get("BITGET_SECRET_KEY", "")
 BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
 
-# Telegram Credentials
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID", "")
 
-# Parameter Konfigurasi Strategi
 PARAMS_FOREX = {
     "length_period": 50, "batas_zf": 0.12, "min_drift": 0.10, "use_ema_filter": True,
     "kepekaan_fractal": 8, "min_fvg_mult": 0.5, "sigma_sl_mult": 4.5,
@@ -390,6 +385,12 @@ def fmt_p(symbol, val):
     if val is None or np.isnan(val):
         return "-"
     sym_upper = symbol.upper()
+    if val < 0.001:
+        return f"{val:,.8f}"
+    elif val < 0.01:
+        return f"{val:,.6f}"
+    elif val < 1.0:
+        return f"{val:,.5f}"
     if "JPY" in sym_upper or "XAG" in sym_upper:
         return f"{val:,.3f}"
     elif any(pair in sym_upper for pair in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]) and "USD" in sym_upper:
@@ -524,7 +525,6 @@ def fetch_candles_for_symbol(api_symbol, source, api_key="", interval="5min"):
                 df_yf['datetime'] = pd.to_datetime(df_yf['datetime'])
                 df_yf = df_yf.sort_values('datetime').reset_index(drop=True)
                 return df_yf[['datetime', 'open', 'high', 'low', 'close', 'volume']]
-                
         else:
             url = f"https://api.twelvedata.com/time_series?symbol={api_symbol}&interval={interval}&outputsize=200&apikey={api_key}"
             res = http_session.get(url, timeout=10).json()
@@ -592,7 +592,6 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
         st["raw_drift"] = float(closed_row["raw_drift"])
         st["live_price"] = current_price
 
-        # --- EVALUASI POSISI BUY ---
         if pos_state == 1:
             if params["use_trailing"]:
                 trail_sl = current_price - (std_p * params["sigma_sl_mult"])
@@ -644,7 +643,6 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                     send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                     log_trade_result(disp_name, "TP1", entry, current_price)
 
-        # --- EVALUASI POSISI SELL ---
         elif pos_state == -1:
             if params["use_trailing"]:
                 trail_sl = current_price + (std_p * params["sigma_sl_mult"])
@@ -696,7 +694,6 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                     send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                     log_trade_result(disp_name, "TP1", entry, current_price)
 
-        # --- PEMANTAUAN SINYAL BARU ---
         buy_signal = (st["pos_state"] == 0) and raw_buy and (st.get("last_signal_time") != closed_row_time)
         sell_signal = (st["pos_state"] == 0) and raw_sell and (st.get("last_signal_time") != closed_row_time)
 
@@ -793,7 +790,6 @@ def run_m91_scalper_scheduler():
     while True:
         try:
             now = datetime.now()
-            # Perhitungan jeda dinamis agar eksekusi sinkron di awal interval 5 menit
             seconds_to_next_5m = 300 - ((now.minute % 5) * 60 + now.second)
             time.sleep(seconds_to_next_5m)
 
@@ -804,7 +800,6 @@ def run_m91_scalper_scheduler():
             curr_week_key = wib_time.strftime("%Y-W%U")
             curr_month_key = wib_time.strftime("%Y-%m")
 
-            # --- OTO REKAP PERIODIK ---
             if recap_state.get("daily") != curr_daily_key:
                 send_telegram_message(generate_recap(1, "REKAPAN HARIAN"), target_chat_id=TELEGRAM_GROUP_ID)
                 recap_state["daily"] = curr_daily_key
@@ -823,7 +818,6 @@ def run_m91_scalper_scheduler():
             update_all_historical_data()
             flat_status_logs = []
 
-            # 1. PROSES ASET UTAMA
             for disp_name, info in DISPLAY_TO_ASSET.items():
                 params = info["params"]
                 with state_lock:
@@ -839,7 +833,6 @@ def run_m91_scalper_scheduler():
                 log_line = process_single_asset_lifecycle(disp_name, params, curr_price, closed_row)
                 flat_status_logs.append(log_line)
 
-            # 2. PROSES DINAMIS: TOP 10 BITGET FUTURES GAINERS
             top_gainers = get_bitget_top_gainers()
             active_bitget_symbols = [coin.get("symbol", "") for coin in top_gainers if coin.get("symbol")]
 
@@ -874,7 +867,6 @@ def run_m91_scalper_scheduler():
                 
                 time.sleep(0.1)
 
-            # 3. KIRIM REKAP STATUS PER 5 MENIT
             log_msg = (
                 f"⚡ <b>ZF-Core Scalper M91 Pro Status (Sync 5m)</b>\n"
                 f"Waktu : {time_str}\n\n" +
@@ -885,12 +877,10 @@ def run_m91_scalper_scheduler():
         except Exception as e:
             logging.error(f"Error pada loop scheduler utama: {e}")
 
-# Inisialisasi awal database dan status
 init_db()
 load_open_positions()
 update_all_historical_data()
 
-# Menjalankan WebSocket TwelveData di Thread terpisah
 for group_name, group_cfg in ASSET_CONFIG.items():
     if group_cfg["source"] == "twelvedata":
         ws_thread = threading.Thread(
@@ -900,7 +890,6 @@ for group_name, group_cfg in ASSET_CONFIG.items():
         )
         ws_thread.start()
 
-# Menjalankan Scheduler Utama
 scheduler_thread = threading.Thread(target=run_m91_scalper_scheduler, daemon=True)
 scheduler_thread.start()
 
