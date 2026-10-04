@@ -572,6 +572,8 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
     raw_sell = bool(closed_row["raw_sell"])
     std_p = float(closed_row["std_p"]) if not np.isnan(closed_row["std_p"]) else current_price * 0.001
 
+    clean_name = disp_name.replace("BITGET:", "")
+
     with state_lock:
         if disp_name not in asset_states:
             asset_states[disp_name] = create_empty_state()
@@ -609,7 +611,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                 st["hit_tp1"] = False
                 st["hit_tp2"] = False
                 state_changed = True
-                send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                send_telegram_message(f"🛑 <b>{clean_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                 log_trade_result(disp_name, "SL", entry, current_price)
 
             elif tp3 is not None and current_price >= tp3:
@@ -622,7 +624,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                 st["hit_tp1"] = False
                 st["hit_tp2"] = False
                 state_changed = True
-                send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                 log_trade_result(disp_name, "TP3", entry, current_price)
 
             else:
@@ -631,7 +633,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                     if tp1 is not None:
                         st["active_sl"] = max(st["active_sl"] if st["active_sl"] is not None else tp1, tp1)
                     state_changed = True
-                    send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2 (SL -> TP1)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                    send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 2 (SL -> TP1)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                     log_trade_result(disp_name, "TP2", entry, current_price)
 
                 elif tp1 is not None and current_price >= tp1 and not st.get("hit_tp1", False):
@@ -639,7 +641,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                     if entry is not None:
                         st["active_sl"] = max(st["active_sl"] if st["active_sl"] is not None else entry, entry)
                     state_changed = True
-                    send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                    send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                     log_trade_result(disp_name, "TP1", entry, current_price)
 
         # --- EVALUASI POSISI SELL ---
@@ -661,7 +663,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                 st["hit_tp1"] = False
                 st["hit_tp2"] = False
                 state_changed = True
-                send_telegram_message(f"🛑 <b>{disp_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                send_telegram_message(f"🛑 <b>{clean_name} HIT STOP LOSS (EXIT)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                 log_trade_result(disp_name, "SL", entry, current_price)
 
             elif tp3 is not None and current_price <= tp3:
@@ -674,7 +676,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                 st["hit_tp1"] = False
                 st["hit_tp2"] = False
                 state_changed = True
-                send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 3 (EXIT)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                 log_trade_result(disp_name, "TP3", entry, current_price)
 
             else:
@@ -683,7 +685,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                     if tp1 is not None:
                         st["active_sl"] = min(st["active_sl"] if st["active_sl"] is not None else tp1, tp1)
                     state_changed = True
-                    send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 2 (SL -> TP1)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                    send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 2 (SL -> TP1)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                     log_trade_result(disp_name, "TP2", entry, current_price)
 
                 elif tp1 is not None and current_price <= tp1 and not st.get("hit_tp1", False):
@@ -691,7 +693,7 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
                     if entry is not None:
                         st["active_sl"] = min(st["active_sl"] if st["active_sl"] is not None else entry, entry)
                     state_changed = True
-                    send_telegram_message(f"🎯 <b>{disp_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(disp_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
+                    send_telegram_message(f"🎯 <b>{clean_name} HIT TAKE PROFIT 1 (SL -> BE)</b> @ {fmt_p(clean_name, current_price)}", target_chat_id=TELEGRAM_GROUP_ID)
                     log_trade_result(disp_name, "TP1", entry, current_price)
 
         # --- PEMANTAUAN SINYAL BARU ---
@@ -713,12 +715,12 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
 
             msg_buy = (
                 f"🚨 <b>ZF-CORE M91 PRO BUY SIGNAL</b> 🚨\n\n"
-                f"📊 <b>Pair:</b> {disp_name}\n"
-                f"💵 <b>Entry:</b> {fmt_p(disp_name, current_price)}\n"
-                f"🛑 <b>Trailing SL:</b> {fmt_p(disp_name, st['active_sl'])}\n"
-                f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
-                f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
-                f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
+                f"📊 <b>Pair:</b> {clean_name}\n"
+                f"💵 <b>Entry:</b> {fmt_p(clean_name, current_price)}\n"
+                f"🛑 <b>Trailing SL:</b> {fmt_p(clean_name, st['active_sl'])}\n"
+                f"🎯 <b>TP 1:</b> {fmt_p(clean_name, st['active_tp1'])}\n"
+                f"🎯 <b>TP 2:</b> {fmt_p(clean_name, st['active_tp2'])}\n"
+                f"🎯 <b>TP 3:</b> {fmt_p(clean_name, st['active_tp3'])}\n"
                 f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
             )
             send_telegram_message(msg_buy, target_chat_id=TELEGRAM_GROUP_ID)
@@ -738,12 +740,12 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
 
             msg_sell = (
                 f"🚨 <b>ZF-CORE M91 PRO SELL SIGNAL</b> 🚨\n\n"
-                f"📊 <b>Pair:</b> {disp_name}\n"
-                f"💵 <b>Entry:</b> {fmt_p(disp_name, current_price)}\n"
-                f"🛑 <b>Trailing SL:</b> {fmt_p(disp_name, st['active_sl'])}\n"
-                f"🎯 <b>TP 1:</b> {fmt_p(disp_name, st['active_tp1'])}\n"
-                f"🎯 <b>TP 2:</b> {fmt_p(disp_name, st['active_tp2'])}\n"
-                f"🎯 <b>TP 3:</b> {fmt_p(disp_name, st['active_tp3'])}\n"
+                f"📊 <b>Pair:</b> {clean_name}\n"
+                f"💵 <b>Entry:</b> {fmt_p(clean_name, current_price)}\n"
+                f"🛑 <b>Trailing SL:</b> {fmt_p(clean_name, st['active_sl'])}\n"
+                f"🎯 <b>TP 1:</b> {fmt_p(clean_name, st['active_tp1'])}\n"
+                f"🎯 <b>TP 2:</b> {fmt_p(clean_name, st['active_tp2'])}\n"
+                f"🎯 <b>TP 3:</b> {fmt_p(clean_name, st['active_tp3'])}\n"
                 f"⚡ <b>ZF-Score:</b> {st['zf_score']:.2f} | <b>Drift:</b> {st['d_res']:.2f}%"
             )
             send_telegram_message(msg_sell, target_chat_id=TELEGRAM_GROUP_ID)
@@ -751,8 +753,8 @@ def process_single_asset_lifecycle(disp_name, params, current_price, closed_row)
         if state_changed:
             save_open_positions()
 
-        state_txt = "BUY 🟢" if st["pos_state"] == 1 else "SELL 🔴" if st["pos_state"] == -1 else "NEUTRAL ⚪"
-        return f"• <b>{disp_name}</b>: {fmt_p(disp_name, current_price)} | D_res: {st['d_res']:.2f}% | ZF: {st['zf_score']:.2f} | [{state_txt}]"
+        state_txt = " | [BUY 🟢]" if st["pos_state"] == 1 else " | [SELL 🔴]" if st["pos_state"] == -1 else ""
+        return f"• <b>{clean_name}</b>: {fmt_p(clean_name, current_price)} | D_res: {st['d_res']:.2f}% | ZF: {st['zf_score']:.2f}{state_txt}"
 
 def start_websocket_twelvedata(group_name, api_key, assets):
     api_symbols = [item["api_symbol"] for item in assets]
@@ -868,7 +870,7 @@ def run_m91_scalper_scheduler():
                     log_line = process_single_asset_lifecycle(disp_name, PARAMS_BITGET, curr_price, closed_row)
                     flat_status_logs.append(log_line)
                 else:
-                    flat_status_logs.append(f"• <b>{disp_name}</b>: Data Belum Siap")
+                    flat_status_logs.append(f"• <b>{sym}</b>: Data Belum Siap")
                 
                 time.sleep(0.1)
 
