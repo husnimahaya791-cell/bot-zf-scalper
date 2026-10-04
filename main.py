@@ -196,6 +196,55 @@ for disp_name in DISPLAY_TO_ASSET.keys():
 
 http_session = requests.Session()
 
+def fmt_p(symbol, val):
+    """
+    Format angka presisi dinamis tinggi agar sesuai dengan tampilan real-time Bitget.
+    Menghindari pemotongan desimal koin micro-cap (BEAM, STRK, PUMP, ATH, dll).
+    """
+    if val is None or np.isnan(val):
+        return "-"
+    try:
+        v = float(val)
+    except (ValueError, TypeError):
+        return str(val)
+
+    if v == 0:
+        return "0.00"
+
+    abs_v = abs(v)
+    sym_upper = str(symbol).upper()
+
+    # Khusus Pair Forex
+    if "JPY" in sym_upper:
+        return f"{v:,.3f}"
+    if any(pair in sym_upper for pair in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]) and "USD" in sym_upper:
+        return f"{v:,.5f}"
+
+    # Aset Aset Kripto & Komoditas Berdasarkan Skala Harga
+    if abs_v >= 1000:
+        return f"{v:,.2f}"
+    elif abs_v >= 10:
+        return f"{v:,.2f}"
+    elif abs_v >= 1.0:
+        res = f"{v:,.4f}".rstrip('0')
+        if res.endswith('.'):
+            res += '00'
+        elif len(res.split('.')[1]) < 2:
+            res += '0'
+        return res
+    elif abs_v >= 0.1:
+        res = f"{v:.5f}".rstrip('0')
+        if len(res.split('.')[1]) < 2:
+            res += '0'
+        return res
+    elif abs_v >= 0.00001:
+        res = f"{v:.6f}".rstrip('0')
+        if len(res.split('.')[1]) < 2:
+            res += '0'
+        return res
+    else:
+        return f"{v:.8f}".rstrip('0')
+
 def bitget_signature(timestamp, method, request_path, body=""):
     message = timestamp + method.upper() + request_path + body
     mac = hmac.new(BITGET_SECRET_KEY.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
@@ -212,11 +261,9 @@ def bitget_headers(method, request_path, body=""):
     }
 
 def get_bitget_top_gainers():
-    path = "/api/v2/mix/market/tickers?productType=USDT-FUTURES"
-    url = f"https://api.bitget.com{path}"
-    headers = bitget_headers("GET", path) if BITGET_API_KEY else {}
+    url = "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
     try:
-        res = http_session.get(url, headers=headers, timeout=10).json()
+        res = http_session.get(url, timeout=10).json()
         if res.get("code") == "00000" and "data" in res:
             tickers = res["data"]
             valid_tickers = [t for t in tickers if t.get("change24h") is not None]
@@ -229,11 +276,9 @@ def get_bitget_top_gainers():
 def get_bitget_futures_candles(symbol, granularity="5m"):
     gran_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1D": "1D"}
     g = gran_map.get(granularity, "5m")
-    path = f"/api/v2/mix/market/candles?symbol={symbol}&productType=USDT-FUTURES&granularity={g}&limit=200"
-    url = f"https://api.bitget.com{path}"
-    headers = bitget_headers("GET", path) if BITGET_API_KEY else {}
+    url = f"https://api.bitget.com/api/v2/mix/market/candles?symbol={symbol}&productType=USDT-FUTURES&granularity={g}&limit=200"
     try:
-        res = http_session.get(url, headers=headers, timeout=10).json()
+        res = http_session.get(url, timeout=10).json()
         if res.get("code") == "00000" and "data" in res:
             raw_candles = res["data"]
             data = [{
@@ -385,55 +430,6 @@ def generate_recap(days, title):
         )
     except Exception as e:
         return f"Gagal membuat rekapan: {e}"
-
-def fmt_p(symbol, val):
-    """
-    Format angka dinamis presisi tinggi agar tidak memotong harga altcoins Bitget.
-    """
-    if val is None or np.isnan(val):
-        return "-"
-    try:
-        val = float(val)
-    except (ValueError, TypeError):
-        return str(val)
-
-    if val == 0:
-        return "0.00"
-
-    sym_upper = str(symbol).upper()
-
-    # Forex
-    if "JPY" in sym_upper:
-        return f"{val:,.3f}"
-    if any(pair in sym_upper for pair in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]) and "USD" in sym_upper:
-        return f"{val:,.5f}"
-
-    abs_val = abs(val)
-
-    # Cryptocurrencies & Commodities
-    if abs_val >= 1000:
-        return f"{val:,.2f}"
-    elif abs_val >= 10:
-        return f"{val:,.2f}"
-    elif abs_val >= 1.0:
-        s = f"{val:,.4f}".rstrip('0')
-        if s.endswith('.'):
-            s += '00'
-        elif len(s.split('.')[1]) < 2:
-            s += '0'
-        return s
-    elif abs_val >= 0.001:
-        s = f"{val:.6f}".rstrip('0')
-        if len(s.split('.')[1]) < 4:
-            s = f"{val:.4f}"
-        return s
-    elif abs_val >= 0.000001:
-        s = f"{val:.8f}".rstrip('0')
-        if len(s.split('.')[1]) < 6:
-            s = f"{val:.6f}"
-        return s
-    else:
-        return f"{val:.8f}"
 
 app = Flask(__name__)
 
@@ -831,7 +827,6 @@ def run_m91_scalper_scheduler():
     while True:
         try:
             now = datetime.now()
-            # Sinkronisasi ke awal interval 5 menit
             seconds_to_next_5m = 300 - ((now.minute % 5) * 60 + now.second)
             time.sleep(seconds_to_next_5m)
 
@@ -877,7 +872,7 @@ def run_m91_scalper_scheduler():
                 log_line = process_single_asset_lifecycle(disp_name, params, curr_price, closed_row)
                 flat_status_logs.append(log_line)
 
-            # 2. TOP 10 BITGET FUTURES GAINERS (Real-time Ticker Price)
+            # 2. TOP 10 BITGET FUTURES GAINERS
             top_gainers = get_bitget_top_gainers()
             active_bitget_symbols = [coin.get("symbol", "") for coin in top_gainers if coin.get("symbol")]
             ticker_price_map = {
@@ -904,7 +899,6 @@ def run_m91_scalper_scheduler():
                     df_calc = calculate_zf_core(df, PARAMS_BITGET)
                     closed_row = df_calc.iloc[-2] if len(df_calc) >= 2 else df_calc.iloc[-1]
                     
-                    # Ambil harga real-time langsung dari API Ticker Bitget
                     live_p = ticker_price_map.get(sym, 0.0)
                     if live_p > 0:
                         curr_price = live_p
@@ -935,12 +929,12 @@ def run_m91_scalper_scheduler():
         except Exception as e:
             logging.error(f"Error pada loop scheduler utama: {e}")
 
-# Inisialisasi awal
+# Inisialisasi Database & Data Awal
 init_db()
 load_open_positions()
 update_all_historical_data()
 
-# Menjalankan WebSocket TwelveData di Thread terpisah
+# Menjalankan WebSocket TwelveData di Thread Terpisah
 for group_name, group_cfg in ASSET_CONFIG.items():
     if group_cfg["source"] == "twelvedata":
         ws_thread = threading.Thread(
