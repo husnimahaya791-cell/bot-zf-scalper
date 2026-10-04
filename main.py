@@ -1,6 +1,9 @@
 import os
 import time
 import json
+import hmac
+import hashlib
+import base64
 import threading
 import requests
 import numpy as np
@@ -13,6 +16,10 @@ from datetime import datetime, timezone, timedelta
 STATE_FILE = "active_positions.json"
 STATS_FILE = "trade_history.json"
 RECAP_FILE = "recap_state.json"
+
+BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
+BITGET_SECRET_KEY = os.environ.get("BITGET_SECRET_KEY", "")
+BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
 
 PARAMS_FOREX = {
     "length_period": 50,
@@ -169,6 +176,105 @@ for disp_name in DISPLAY_TO_ASSET.keys():
 
 http_session = requests.Session()
 
+def bitget_signature(timestamp, method, request_path, body=""):
+    message = timestamp + method.upper() + request_path + body
+    mac = hmac.new(BITGET_SECRET_KEY.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
+    return base64.b64encode(mac.digest()).decode('utf-8')
+
+def bitget_headers(method, request_path, body=""):
+    timestamp = str(int(time.time() * 1000))
+    headers = {
+        "ACCESS-KEY": BITGET_API_KEY,
+        "ACCESS-SIGN": bitget_signature(timestamp, method, request_path, body),
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+    return headers
+
+def get_bitget_top_gainers():
+    path = "/api/v2/mix/market/tickers?productType=USDT-FUTURES"
+    url = f"https://api.bitget.com{path}"
+    headers = bitget_headers("GET", path) if BITGET_API_KEY else {}
+    try:
+        res = http_session.get(url, headers=headers, timeout=10).json()
+        if res.get("code") == "00000" and "data" in res:
+            tickers = res["data"]
+            valid_tickers = []
+            for t in tickers:
+                if "change24h" in t and t["change24h"] is not None:
+                    valid_tickers.append(t)
+            sorted_tickers = sorted(valid_tickers, key=lambda x: float(x.get("change24h", 0)), reverse=True)
+            return sorted_tickers[:10]
+    except Exception:
+        pass
+    return []
+
+def get_bitget_futures_candles(symbol, granularity="5m"):
+    gran_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1D": "1D"}
+    g = gran_map.get(granularity, "5m")
+    path = f"/api/v2/mix/market/candles?symbol={symbol}&productType=USDT-FUTURES&granularity={g}&limit=200"
+    url = f"https://api.bitget.com{path}"
+    headers = bitget_headers("GET", path) if BITGET_API_KEY else {}
+    try:
+        res = http_session.get(url, headers=headers, timeout=10).json()
+        if res.get("code") == "00000" and "data" in res:
+            raw_candles = res["data"]
+            data = []
+            for k in raw_candles:
+                data.append({
+                    "datetime": pd.to_datetime(int(k[0]), unit='ms'),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5])
+                })
+            df = pd.DataFrame(data)
+            return df.sort_values('datetime').reset_index(drop=True)
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+def process_bitget_gainers_analysis():
+    top_gainers = get_bitget_top_gainers()
+    if not top_gainers:
+        return
+    
+    report_lines = []
+    wib_now = datetime.now(timezone.utc) + timedelta(hours=7)
+    time_str = wib_now.strftime("%Y-%m-%d %H:%M WIB")
+    
+    report_lines.append(f"🚀 <b>TOP 10 BITGET FUTURES GAINERS</b>")
+    report_lines.append(f"🕒 <b>Waktu:</b> {time_str}")
+    report_lines.append("━━━━━━━━━━━━━━━━━━━")
+    
+    for idx, coin in enumerate(top_gainers, 1):
+        symbol = coin.get("symbol", "")
+        last_price = float(coin.get("lastPr", 0))
+        change_24h = float(coin.get("change24h", 0)) * 100.0
+        
+        df = get_bitget_futures_candles(symbol, granularity="5m")
+        if not df.empty and len(df) >= 150:
+            df_calc = calculate_zf_core(df, PARAMS_BTC)
+            closed_row = df_calc.iloc[-2] if len(df_calc) >= 2 else df_calc.iloc[-1]
+            zf_score = float(closed_row["zf_score"])
+            d_res = float(closed_row["d_res"])
+            
+            raw_buy = bool(closed_row["raw_buy"])
+            raw_sell = bool(closed_row["raw_sell"])
+            signal_txt = "BUY 🟢" if raw_buy else ("SELL 🔴" if raw_sell else "NEUTRAL ⚪")
+            
+            report_lines.append(
+                f"{idx}. <b>{symbol}</b>: {fmt_p(symbol, last_price)} (+{change_24h:.2f}%)\n"
+                f"   └ ZF: {zf_score:.2f} | Drift: {d_res:.2f}% | [{signal_txt}]"
+            )
+        else:
+            report_lines.append(f"{idx}. <b>{symbol}</b>: {fmt_p(symbol, last_price)} (+{change_24h:.2f}%) | Data Belum Siap")
+        time.sleep(0.2)
+        
+    send_telegram_message("\n".join(report_lines), target_chat_id=TELEGRAM_GROUP_ID)
+
 def save_open_positions():
     try:
         data_to_save = {}
@@ -210,7 +316,7 @@ def load_recap_state():
                 return json.load(f)
         except Exception:
             pass
-    return {"daily": "", "weekly": "", "monthly": ""}
+    return {"daily": "", "weekly": "", "monthly": "", "bitget_day": ""}
 
 def save_recap_state(state):
     try:
@@ -531,6 +637,11 @@ def run_m91_scalper_scheduler():
             if wib_time.day == 1 and recap_state.get("monthly") != curr_month_key:
                 send_telegram_message(generate_recap(30, "REKAPAN BULANAN"), target_chat_id=TELEGRAM_GROUP_ID)
                 recap_state["monthly"] = curr_month_key
+                save_recap_state(recap_state)
+
+            if recap_state.get("bitget_day") != curr_daily_key:
+                process_bitget_gainers_analysis()
+                recap_state["bitget_day"] = curr_daily_key
                 save_recap_state(recap_state)
 
             update_all_historical_data()
