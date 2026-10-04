@@ -387,34 +387,53 @@ def generate_recap(days, title):
         return f"Gagal membuat rekapan: {e}"
 
 def fmt_p(symbol, val):
+    """
+    Format angka dinamis presisi tinggi agar tidak memotong harga altcoins Bitget.
+    """
     if val is None or np.isnan(val):
         return "-"
-    sym_upper = symbol.upper()
-    
-    # Format khusus Forex dan Perak
-    if "JPY" in sym_upper or "XAG" in sym_upper:
-        return f"{val:,.3f}"
-    elif any(pair in sym_upper for pair in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]) and "USD" in sym_upper:
-        return f"{val:,.5f}"
-    
-    # Format dinamis presisi tinggi untuk Crypto / Bitget Altcoins
-    abs_val = abs(val)
-    if abs_val == 0:
-        return "0.00"
-    elif abs_val < 0.0001:
-        s = f"{val:,.8f}".rstrip('0').rstrip('.')
-    elif abs_val < 1.0:
-        s = f"{val:,.6f}".rstrip('0').rstrip('.')
-    elif abs_val < 100.0:
-        s = f"{val:,.4f}".rstrip('0').rstrip('.')
-    else:
-        s = f"{val:,.2f}"
+    try:
+        val = float(val)
+    except (ValueError, TypeError):
+        return str(val)
 
-    if "." not in s:
-        s += ".00"
-    elif len(s.split(".")[1]) < 2:
-        s += "0"
-    return s
+    if val == 0:
+        return "0.00"
+
+    sym_upper = str(symbol).upper()
+
+    # Forex
+    if "JPY" in sym_upper:
+        return f"{val:,.3f}"
+    if any(pair in sym_upper for pair in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]) and "USD" in sym_upper:
+        return f"{val:,.5f}"
+
+    abs_val = abs(val)
+
+    # Cryptocurrencies & Commodities
+    if abs_val >= 1000:
+        return f"{val:,.2f}"
+    elif abs_val >= 10:
+        return f"{val:,.2f}"
+    elif abs_val >= 1.0:
+        s = f"{val:,.4f}".rstrip('0')
+        if s.endswith('.'):
+            s += '00'
+        elif len(s.split('.')[1]) < 2:
+            s += '0'
+        return s
+    elif abs_val >= 0.001:
+        s = f"{val:.6f}".rstrip('0')
+        if len(s.split('.')[1]) < 4:
+            s = f"{val:.4f}"
+        return s
+    elif abs_val >= 0.000001:
+        s = f"{val:.8f}".rstrip('0')
+        if len(s.split('.')[1]) < 6:
+            s = f"{val:.6f}"
+        return s
+    else:
+        return f"{val:.8f}"
 
 app = Flask(__name__)
 
@@ -812,7 +831,7 @@ def run_m91_scalper_scheduler():
     while True:
         try:
             now = datetime.now()
-            # Perhitungan jeda dinamis agar eksekusi sinkron di awal interval 5 menit
+            # Sinkronisasi ke awal interval 5 menit
             seconds_to_next_5m = 300 - ((now.minute % 5) * 60 + now.second)
             time.sleep(seconds_to_next_5m)
 
@@ -823,7 +842,7 @@ def run_m91_scalper_scheduler():
             curr_week_key = wib_time.strftime("%Y-W%U")
             curr_month_key = wib_time.strftime("%Y-%m")
 
-            # --- OTO REKAP PERIODIK ---
+            # Rekapan Periodik
             if recap_state.get("daily") != curr_daily_key:
                 send_telegram_message(generate_recap(1, "REKAPAN HARIAN"), target_chat_id=TELEGRAM_GROUP_ID)
                 recap_state["daily"] = curr_daily_key
@@ -842,7 +861,7 @@ def run_m91_scalper_scheduler():
             update_all_historical_data()
             flat_status_logs = []
 
-            # 1. PROSES ASET UTAMA
+            # 1. ASET UTAMA
             for disp_name, info in DISPLAY_TO_ASSET.items():
                 params = info["params"]
                 with state_lock:
@@ -858,7 +877,7 @@ def run_m91_scalper_scheduler():
                 log_line = process_single_asset_lifecycle(disp_name, params, curr_price, closed_row)
                 flat_status_logs.append(log_line)
 
-            # 2. PROSES DINAMIS: TOP 10 BITGET FUTURES GAINERS
+            # 2. TOP 10 BITGET FUTURES GAINERS (Real-time Ticker Price)
             top_gainers = get_bitget_top_gainers()
             active_bitget_symbols = [coin.get("symbol", "") for coin in top_gainers if coin.get("symbol")]
             ticker_price_map = {
@@ -885,7 +904,7 @@ def run_m91_scalper_scheduler():
                     df_calc = calculate_zf_core(df, PARAMS_BITGET)
                     closed_row = df_calc.iloc[-2] if len(df_calc) >= 2 else df_calc.iloc[-1]
                     
-                    # Mengutamakan harga live langsung dari Ticker Bitget
+                    # Ambil harga real-time langsung dari API Ticker Bitget
                     live_p = ticker_price_map.get(sym, 0.0)
                     if live_p > 0:
                         curr_price = live_p
@@ -896,6 +915,7 @@ def run_m91_scalper_scheduler():
                         if disp_name not in asset_states:
                             asset_states[disp_name] = create_empty_state()
                         asset_states[disp_name]["candle_history"] = df_calc
+                        asset_states[disp_name]["live_price"] = curr_price
 
                     log_line = process_single_asset_lifecycle(disp_name, PARAMS_BITGET, curr_price, closed_row)
                     flat_status_logs.append(log_line)
@@ -904,7 +924,7 @@ def run_m91_scalper_scheduler():
                 
                 time.sleep(0.1)
 
-            # 3. KIRIM REKAP STATUS PER 5 MENIT
+            # 3. KIRIM PESAN REKAP STATUS
             log_msg = (
                 f"⚡ <b>ZF-Core Scalper M91 Pro Status (Sync 5m)</b>\n"
                 f"Waktu : {time_str}\n\n" +
@@ -915,7 +935,7 @@ def run_m91_scalper_scheduler():
         except Exception as e:
             logging.error(f"Error pada loop scheduler utama: {e}")
 
-# Inisialisasi awal database dan status
+# Inisialisasi awal
 init_db()
 load_open_positions()
 update_all_historical_data()
