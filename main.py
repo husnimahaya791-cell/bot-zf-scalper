@@ -198,8 +198,8 @@ http_session = requests.Session()
 
 def fmt_p(symbol, val):
     """
-    Format angka presisi dinamis tinggi agar sesuai dengan tampilan real-time Bitget.
-    Menghindari pemotongan desimal koin micro-cap (BEAM, STRK, PUMP, ATH, dll).
+    Format harga presisi dinamis tinggi yang presisi persis sama seperti aplikasi Bitget.
+    Menghilangkan pembulatan kasar (seperti 0.00) dan menampilkan digit desimal asli koin.
     """
     if val is None or np.isnan(val):
         return "-"
@@ -214,36 +214,25 @@ def fmt_p(symbol, val):
     abs_v = abs(v)
     sym_upper = str(symbol).upper()
 
-    # Khusus Pair Forex
+    # Pasangan Forex khusus JPY
     if "JPY" in sym_upper:
         return f"{v:,.3f}"
+    
+    # Pasangan Forex standar
     if any(pair in sym_upper for pair in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]) and "USD" in sym_upper:
         return f"{v:,.5f}"
 
-    # Aset Aset Kripto & Komoditas Berdasarkan Skala Harga
-    if abs_v >= 1000:
+    # Format Dinamis Kripto & Komoditas (Bitget)
+    if abs_v >= 100:
         return f"{v:,.2f}"
-    elif abs_v >= 10:
-        return f"{v:,.2f}"
-    elif abs_v >= 1.0:
-        res = f"{v:,.4f}".rstrip('0')
-        if res.endswith('.'):
-            res += '00'
-        elif len(res.split('.')[1]) < 2:
-            res += '0'
-        return res
-    elif abs_v >= 0.1:
-        res = f"{v:.5f}".rstrip('0')
-        if len(res.split('.')[1]) < 2:
-            res += '0'
-        return res
-    elif abs_v >= 0.00001:
-        res = f"{v:.6f}".rstrip('0')
-        if len(res.split('.')[1]) < 2:
-            res += '0'
-        return res
     else:
-        return f"{v:.8f}".rstrip('0')
+        # Mengakomodasi altcoin micro-cap (BEAM, STRK, PUMP, dll) hingga 8 desimal tanpa angka 0 tidak berguna
+        formatted = f"{v:.8f}".rstrip('0')
+        if formatted.endswith('.'):
+            formatted += '00'
+        elif len(formatted.split('.')[1]) < 2:
+            formatted += '0'
+        return formatted
 
 def bitget_signature(timestamp, method, request_path, body=""):
     message = timestamp + method.upper() + request_path + body
@@ -875,11 +864,15 @@ def run_m91_scalper_scheduler():
             # 2. TOP 10 BITGET FUTURES GAINERS
             top_gainers = get_bitget_top_gainers()
             active_bitget_symbols = [coin.get("symbol", "") for coin in top_gainers if coin.get("symbol")]
-            ticker_price_map = {
-                coin.get("symbol"): float(coin.get("lastPr", 0)) 
-                for coin in top_gainers 
-                if coin.get("symbol") and coin.get("lastPr")
-            }
+            ticker_price_map = {}
+            for coin in top_gainers:
+                sym = coin.get("symbol")
+                last_p = coin.get("lastPr")
+                if sym and last_p is not None:
+                    try:
+                        ticker_price_map[sym] = float(last_p)
+                    except ValueError:
+                        pass
 
             with state_lock:
                 for name, st in asset_states.items():
