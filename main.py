@@ -198,10 +198,10 @@ http_session = requests.Session()
 
 def fmt_p(symbol, val):
     """
-    Format harga presisi dinamis tinggi yang presisi persis sama seperti aplikasi Bitget.
-    Menghilangkan pembulatan kasar (seperti 0.00) dan menampilkan digit desimal asli koin.
+    Format harga presisi dinamis tinggi.
+    Menampilkan desimal persis sama seperti aplikasi Bitget tanpa memotong angka desimal kecil.
     """
-    if val is None or np.isnan(val):
+    if val is None or val == "" or str(val) == "-":
         return "-"
     try:
         v = float(val)
@@ -214,24 +214,36 @@ def fmt_p(symbol, val):
     abs_v = abs(v)
     sym_upper = str(symbol).upper()
 
-    # Pasangan Forex khusus JPY
+    # Pair Forex khusus JPY
     if "JPY" in sym_upper:
         return f"{v:,.3f}"
     
-    # Pasangan Forex standar
+    # Pair Forex standar (5 desimal)
     if any(pair in sym_upper for pair in ["EUR", "GBP", "AUD", "NZD", "CAD", "CHF"]) and "USD" in sym_upper:
         return f"{v:,.5f}"
 
-    # Format Dinamis Kripto & Komoditas (Bitget)
-    if abs_v >= 100:
+    # Format Dinamis Kripto & Komoditas Bitget
+    if abs_v >= 1000:
         return f"{v:,.2f}"
-    else:
-        # Mengakomodasi altcoin micro-cap (BEAM, STRK, PUMP, dll) hingga 8 desimal tanpa angka 0 tidak berguna
-        formatted = f"{v:.8f}".rstrip('0')
-        if formatted.endswith('.'):
-            formatted += '00'
-        elif len(formatted.split('.')[1]) < 2:
+    elif abs_v >= 1:
+        # Koin seharga $1 - $1000 (misal AXS: 1.399, AKT: 0.7486) -> tampilkan hingga 4 desimal aktif
+        formatted = f"{v:.4f}".rstrip('0').rstrip('.')
+        if '.' in formatted:
+            decimals = len(formatted.split('.')[1])
+            if decimals < 2:
+                formatted += '0' * (2 - decimals)
+        else:
+            formatted += '.00'
+        return formatted
+    elif abs_v >= 0.01:
+        # Koin seharga $0.01 - $1 (misal STRK: 0.054777, COAI: 0.3452) -> tampilkan hingga 6 desimal
+        formatted = f"{v:.6f}".rstrip('0').rstrip('.')
+        if '.' in formatted and len(formatted.split('.')[1]) < 2:
             formatted += '0'
+        return formatted
+    else:
+        # Micro-cap sub $0.01 (misal BEAM: 0.002755, PUMP: 0.006279) -> tampilkan hingga 8 desimal
+        formatted = f"{v:.8f}".rstrip('0').rstrip('.')
         return formatted
 
 def bitget_signature(timestamp, method, request_path, body=""):
