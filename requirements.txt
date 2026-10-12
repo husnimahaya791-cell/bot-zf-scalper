@@ -1,8 +1,6 @@
-pandas
-numpy
-ccxt
-requests
-websocket-client
-yfinance
-Flask
-gunicorn
+Flask==3.1.0
+waitress==3.0.2
+requests==2.32.3
+pandas==2.2.3
+numpy==2.2.1
+urllib3==2.3.0
