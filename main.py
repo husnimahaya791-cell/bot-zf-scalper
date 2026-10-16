@@ -36,10 +36,10 @@ TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID", "")
 
 PARAMS_UNIFIED = {
     "length_period": 50,
-    "batas_zf": 0.75,
-    "min_drift": 0.35,
+    "batas_zf": 0.70,
+    "min_drift": 0.30,
     "kepekaan_fractal": 12,
-    "min_fvg_mult": 0.6,
+    "min_fvg_mult": 0.5,
     "sigma_sl_mult": 5,
     "rr1_ratio": 0.5,
     "rr2_ratio": 1.0,
