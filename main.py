@@ -472,7 +472,7 @@ def get_bitget_orderbook(symbol, source):
             headers = bitget_headers("GET", path) if BITGET_API_KEY else {}
             res = http_session.get(url, headers=headers, timeout=12).json()
         else:
-            url = f"https://api.bitget.com/api/v2/mix/market/orderbook?symbol=g{symbol}&productType=USDT-FUTURES&limit=15"
+            url = f"https://api.bitget.com/api/v2/mix/market/orderbook?symbol={symbol}&productType=USDT-FUTURES&limit=15"
             res = http_session.get(url, timeout=12).json()
 
         if res.get("code") == "00000" and "data" in res:
