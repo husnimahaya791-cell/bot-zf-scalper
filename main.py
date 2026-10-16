@@ -36,11 +36,11 @@ TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID", "")
 
 PARAMS_UNIFIED = {
     "length_period": 50,
-    "batas_zf": 0.65,
-    "min_drift": 0.27,
-    "kepekaan_fractal": 12,
-    "min_fvg_mult": 0.5,
-    "sigma_sl_mult": 4.5,
+    "batas_zf": 0.78,
+    "min_drift": 0.45,
+    "kepekaan_fractal": 15,
+    "min_fvg_mult": 0.8,
+    "sigma_sl_mult": 5.5,
     "rr1_ratio": 0.5,
     "rr2_ratio": 1.0,
     "rr3_ratio": 1.5,
@@ -472,7 +472,7 @@ def get_bitget_orderbook(symbol, source):
             headers = bitget_headers("GET", path) if BITGET_API_KEY else {}
             res = http_session.get(url, headers=headers, timeout=12).json()
         else:
-            url = f"https://api.bitget.com/api/v2/mix/market/orderbook?symbol={symbol}&productType=USDT-FUTURES&limit=15"
+            url = f"https://api.bitget.com/api/v2/mix/market/orderbook?symbol=g{symbol}&productType=USDT-FUTURES&limit=15"
             res = http_session.get(url, timeout=12).json()
 
         if res.get("code") == "00000" and "data" in res:
