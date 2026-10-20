@@ -5,3 +5,6 @@ pandas
 numpy
 urllib3
 gunicorn
+pyrogram
+tgcrypto
+requests
