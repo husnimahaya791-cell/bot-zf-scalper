@@ -35,15 +35,15 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID", "")
 
 PARAMS_UNIFIED = {
-    "length_period": 50,
-    "batas_zf": 0.65,
-    "min_drift": 0.27,
-    "kepekaan_fractal": 12,
-    "min_fvg_mult": 0.5,
+    "length_period": 75,
+    "batas_zf": 0.75,
+    "min_drift": 0.35,
+    "kepekaan_fractal": 15,
+    "min_fvg_mult": 1.5,
     "sigma_sl_mult": 4.5,
-    "rr1_ratio": 0.5,
-    "rr2_ratio": 1.0,
-    "rr3_ratio": 1.5,
+    "rr1_ratio": 1.0,
+    "rr2_ratio": 1.5,
+    "rr3_ratio": 2.0,
     "use_trailing": False  # Trailing & Geser SL dinonaktifkan
 }
 
